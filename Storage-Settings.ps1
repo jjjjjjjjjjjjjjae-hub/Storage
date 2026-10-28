@@ -44,20 +44,30 @@ if ($Action -eq 'Import') { Load-RecoveryFile $Path; return }
 while ($true) {
     Write-Host ''
     Write-Host 'TUZE · сыртқы баптау'
-    Write-Host '1  GitHub токенін бір рет сақтау'
+    Write-Host '1  GitHub-қа браузер арқылы кіру (Google аккаунтымен де болады)'
     Write-Host '2  Қалпына келтіру кілтін файлға шығару'
     Write-Host '3  Қалпына келтіру кілтін файлдан енгізу'
     Write-Host '4  Ескі чат кілтсөзін көшіруге беру'
-    Write-Host '5  GitHub токенін өшіру'
+    Write-Host '5  Қолмен енгізілген GitHub токенін өшіру'
+    Write-Host '6  GitHub токенін қолмен сақтау (балама)'
     Write-Host '0  Шығу'
     $choice = Read-Host 'Таңдау'
     try {
         switch ($choice) {
             '1' {
-                $token = Read-PrivateValue 'GitHub токені (экранда көрінбейді)'
-                [void](Save-GitHubToken $token)
-                $token = $null
-                Write-Host 'Токен Windows профилінде қорғалып сақталды. Чат беті өзі қосылады.'
+                $gh = Get-Command gh -CommandType Application -ErrorAction SilentlyContinue
+                if (-not $gh) {
+                    Write-Host 'GitHub CLI орнатылмаған. Алдымен ресми нұсқасын орнатыңыз:'
+                    Write-Host 'winget install --id GitHub.cli --source winget'
+                    Start-Process 'https://cli.github.com/'
+                    Write-Host 'Орнатқан соң бұл терезені қайта ашып, 1 таңдаңыз.'
+                } else {
+                    & $gh.Source auth login --hostname github.com --web --git-protocol https --skip-ssh-key
+                    if ($LASTEXITCODE -ne 0) { throw 'GitHub арқылы кіру аяқталмады.' }
+                    & $gh.Source auth status --active --hostname github.com | Out-Null
+                    if ($LASTEXITCODE -ne 0) { throw 'GitHub рұқсаты алынбады.' }
+                    Write-Host 'GitHub қосылды. Ашық Tuze чаты өзі синхрондалады.'
+                }
             }
             '2' { Save-RecoveryFile (Read-Host 'Storage қалтасынан тыс толық файл жолы') }
             '3' { Load-RecoveryFile (Read-Host 'Бұрын сақталған кілт файлының толық жолы') }
@@ -67,9 +77,15 @@ while ($true) {
                 $old = $null
                 Write-Host 'Кілтсөз уақытша қорғалып сақталды. Чаттарды көшіру автоматты басталады.'
             }
-            '5' { [void](Remove-TuzeSecret 'github-token'); Write-Host 'GitHub токені өшірілді.' }
+            '5' { [void](Remove-TuzeSecret 'github-token'); Write-Host 'Қолмен берілген GitHub токені өшірілді.' }
+            '6' {
+                $token = Read-PrivateValue 'GitHub токені (экранда көрінбейді)'
+                [void](Save-GitHubToken $token)
+                $token = $null
+                Write-Host 'Токен Windows профилінде қорғалып сақталды. Чат беті өзі қосылады.'
+            }
             '0' { return }
-            default { Write-Host '0–5 арасындағы санды таңдаңыз.' }
+            default { Write-Host '0–6 арасындағы санды таңдаңыз.' }
         }
     } catch { Write-Host ('Қате: ' + $_.Exception.Message) -ForegroundColor Red }
 }

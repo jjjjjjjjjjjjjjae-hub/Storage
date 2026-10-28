@@ -39,6 +39,10 @@ try {
     $token = 'github_pat_test_1234567890abcdef'
     [void](Save-GitHubToken $token)
     if ((Invoke-RestMethod -Uri ($base + '/api/session')).token -ne $token) { throw 'Protected GitHub token did not persist.' }
+    $fakeGh = Join-Path $env:LOCALAPPDATA 'gh.cmd'
+    [System.IO.File]::WriteAllText($fakeGh, "@echo off`r`nif not `%1==auth exit /b 2`r`nif not `%2==token exit /b 2`r`necho gho_test_1234567890abcdef`r`n", [System.Text.Encoding]::ASCII)
+    if ((Get-GitHubAuthToken $fakeGh) -ne 'gho_test_1234567890abcdef') { throw 'GitHub CLI credential path failed.' }
+    if ((Get-GitHubAuthToken 'missing-gh-for-test') -ne $token) { throw 'PAT fallback failed.' }
     [void](Save-LegacyPassphrase 'old-test-passphrase-123')
     if ((Invoke-RestMethod -Uri ($base + '/api/session')).legacy_passphrase -ne 'old-test-passphrase-123') { throw 'Legacy migration secret missing.' }
     [void](Invoke-RestMethod -Uri ($base + '/api/legacy/clear') -Method Post -ContentType 'application/json' -Body '{"done":true}')
@@ -93,7 +97,7 @@ try {
     [void](Import-TuzeMaster $different)
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $settings -Action Import -Path $recoveryPath | Out-Null
     if ($LASTEXITCODE -ne 0 -or (Invoke-RestMethod -Uri ($base + '/api/session')).master -ne $session.master) { throw 'External recovery import failed.' }
-    Write-Host 'WINDOWS_PASS: PS5.1, external settings, DPAPI, Host guard, recovery, Tuze, text/photo routing, separate chats, CAS, backup'
+    Write-Host 'WINDOWS_PASS: PS5.1, external settings, browser GitHub auth, DPAPI, Host guard, recovery, Tuze, text/photo routing, separate chats, CAS, backup'
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
