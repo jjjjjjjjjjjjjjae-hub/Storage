@@ -161,10 +161,12 @@ export class ChatStore {
     throw new Error('Жергілікті сақтау қайшылығы. Чат өзгертілмеді, қайта көріңіз.');
   }
 
-  async append(filename, role, content) {
+  async append(filename, role, content, image = null) {
     const chat = await this.open(filename);
     const now = new Date().toISOString();
-    chat.messages.push({ id: crypto.randomUUID(), role, content, created_at: now });
+    const item = { id: crypto.randomUUID(), role, content, created_at: now };
+    if (image) item.image = image;
+    chat.messages.push(item);
     if (chat.title === 'Жаңа чат' && role === 'user') chat.title = content.slice(0, 48).trim() || 'Жаңа чат';
     chat.updated_at = now;
     return this.save(chat);

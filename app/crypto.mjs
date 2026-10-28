@@ -33,6 +33,16 @@ function validateChat(chat, filename) {
         typeof message.content !== 'string' || typeof message.created_at !== 'string') {
       throw new Error('Чаттағы хабарлама жарамсыз.');
     }
+    if (message.image !== undefined && (message.role !== 'user' || !message.image ||
+        message.image.mime !== 'image/jpeg' ||
+        !Number.isInteger(message.image.width) || !Number.isInteger(message.image.height) ||
+        message.image.width < 1 || message.image.height < 1 ||
+        message.image.width > 1280 || message.image.height > 1280 ||
+        typeof message.image.data !== 'string' ||
+        message.image.data.length > 200_000 ||
+        !/^[A-Za-z0-9+/]+={0,2}$/.test(message.image.data))) {
+      throw new Error('Фото пішімі жарамсыз немесе тым үлкен.');
+    }
     seen.add(message.id);
   }
   return chat;

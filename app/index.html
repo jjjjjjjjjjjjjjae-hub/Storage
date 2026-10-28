@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Tuze · шифрланған чаттар</title>
+  <title>Tuze Chat · жергілікті AI</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.mjs"></script>
 </head>
 <body>
-  <header><div class="brand">TUZE<span>.</span> <small>чаттар</small></div><div id="model-status">Ollama тексерілуде…</div></header>
+  <header><div class="brand">TUZE<span>.</span> <small>AI Chat</small></div><div id="model-status">Ollama тексерілуде…</div></header>
   <main>
     <aside>
       <div class="aside-head"><h2>Чаттар</h2><button id="new-chat" type="button">+ Жаңа чат</button></div>
@@ -33,8 +33,10 @@
       </section>
       <div class="composer">
         <label for="draft">Хабарлама</label>
-        <textarea id="draft" rows="4" maxlength="4000" placeholder="Қазақша жазыңыз…"></textarea>
+        <textarea id="draft" rows="4" maxlength="4000" placeholder="Хабарлама жаз немесе фото тірке…"></textarea>
+        <div class="photo-tools"><label class="photo-button" for="photo-input">📷 Фото қосу</label><input id="photo-input" type="file" accept="image/*"><div id="photo-preview" hidden></div><button id="remove-photo" type="button" hidden>Фотосыз жіберу ✕</button></div>
         <div class="actions"><div class="row"><select id="tuze-mode" aria-label="Tuze режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select><button id="tuze" type="button">Tuze · өзгерісті көру</button></div><button id="send" type="button" class="primary">Жіберу ↗</button></div>
+        <small id="photo-status">Фотоны талдау үшін vision модель тексерілуде…</small><br>
         <small>Ctrl+Enter — жіберу. Жіберген хабарлама модельге бармай тұрып сақталады.</small>
       </div>
     </section>

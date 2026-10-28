@@ -13,7 +13,9 @@ $base = 'http://127.0.0.1:' + $port
 $server = Join-Path $root 'app\server.ps1'
 $stdout = Join-Path $env:LOCALAPPDATA 'stdout.txt'
 $stderr = Join-Path $env:LOCALAPPDATA 'stderr.txt'
-$process = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $server + '"'),'-Port',[string]$port,'-NoBrowser') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
+$mockScript = Join-Path $root 'tests\mock-ollama.mjs'
+$mock = Start-Process -FilePath node.exe -ArgumentList @(('"' + $mockScript + '"'),'11439') -PassThru -WindowStyle Hidden -RedirectStandardOutput (Join-Path $env:LOCALAPPDATA 'mock-out.txt') -RedirectStandardError (Join-Path $env:LOCALAPPDATA 'mock-err.txt')
+$process = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $server + '"'),'-Port',[string]$port,'-OllamaUrl','http://127.0.0.1:11439','-NoBrowser') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 try {
     $ready = $false
     for ($i=0; $i -lt 60; $i++) {
@@ -25,6 +27,14 @@ try {
     if ($page.Content -notmatch 'Tuze') { throw 'HTML was not served.' }
     $script = Invoke-WebRequest -Uri ($base + '/app.mjs') -UseBasicParsing
     if ($script.Content -notmatch 'syncCurrent') { throw 'JavaScript was not served.' }
+    $health = Invoke-RestMethod -Uri ($base + '/api/health')
+    if (-not $health.ready -or -not $health.vision_ready) { throw 'Text or vision model detection failed.' }
+    $textRequest = @{messages=@(@{role='user';content='Сәлем'})} | ConvertTo-Json -Depth 8 -Compress
+    $textReply = Invoke-RestMethod -Uri ($base + '/api/chat') -Method Post -ContentType 'application/json' -Body $textRequest
+    if ($textReply.text -ne 'Мәтін көрінді' -or $textReply.model -ne 'qwen3:4b-instruct') { throw 'Text model routing failed.' }
+    $photoRequest = @{messages=@(@{role='user';content='Бұл не?';image=@{mime='image/jpeg';data='AA==';width=1;height=1}})} | ConvertTo-Json -Depth 8 -Compress
+    $photoReply = Invoke-RestMethod -Uri ($base + '/api/chat') -Method Post -ContentType 'application/json' -Body $photoRequest
+    if ($photoReply.text -ne 'Фото көрінді' -or $photoReply.model -ne 'qwen3-vl:4b-instruct') { throw 'Vision model routing failed.' }
     function Envelope([string]$Filename) {
         return @{schema_version=2;id=[guid]::NewGuid().ToString();filename=$Filename;updated_at='2026-10-28T00:00:00.000Z';version=[guid]::NewGuid().ToString();
             encryption=@{algorithm='AES-256-GCM';kdf='PBKDF2-HMAC-SHA256';iterations=600000;salt='AA==';nonce='AA==';ciphertext='AA=='}}
@@ -45,8 +55,9 @@ try {
     try { [void](Put 'chat_001.json' @{envelope=$first;expected_version=$first.version}); throw 'Stale write was accepted.' }
     catch [System.Net.WebException] { if ([int]$_.Exception.Response.StatusCode -ne 409) { throw } }
     if (@(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'TuzeStorage\chats') -Filter 'chat_001.json.bak.*').Count -lt 1) { throw 'Local backup missing.' }
-    Write-Host 'WINDOWS_PASS: PS5.1 parse, page, static JS, two chats, same-file update, SHA-like CAS, backup'
+    Write-Host 'WINDOWS_PASS: PS5.1, page, text/photo model routing, separate chats, CAS, backup'
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
+    if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
     $env:LOCALAPPDATA = $savedLocalAppData
 }

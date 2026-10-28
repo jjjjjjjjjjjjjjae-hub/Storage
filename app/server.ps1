@@ -1,8 +1,8 @@
-﻿param([int]$Port = 8790, [switch]$NoBrowser)
+﻿param([int]$Port = 8790, [string]$OllamaUrl = '', [switch]$NoBrowser)
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tuze.ps1')
 . (Join-Path $PSScriptRoot 'local.ps1')
-Initialize-Tuze
+Initialize-Tuze $OllamaUrl
 $encoding = [System.Text.UTF8Encoding]::new($false, $true)
 
 function Send-Raw($Stream, [int]$Status, [string]$Type, [byte[]]$Body) {
@@ -10,7 +10,7 @@ function Send-Raw($Stream, [int]$Status, [string]$Type, [byte[]]$Body) {
         411='Length Required';413='Payload Too Large';415='Unsupported Media Type';
         422='Unprocessable Entity';500='Internal Server Error';503='Service Unavailable'}
     $reason = $reasons[$Status]
-    $csp = "default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'"
+    $csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'"
     $head = "HTTP/1.1 $Status $reason`r`nContent-Type: $Type`r`nContent-Length: $($Body.Length)`r`nConnection: close`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nContent-Security-Policy: $csp`r`n`r`n"
     $h = [System.Text.Encoding]::ASCII.GetBytes($head)
     $Stream.Write($h, 0, $h.Length)
@@ -23,28 +23,52 @@ function Send-Json($Stream, [int]$Status, $Data) {
     Send-Raw $Stream $Status 'application/json; charset=utf-8' $body
 }
 
+function Get-VisionModel {
+    try {
+        $tags = Invoke-TuzeOllama 'GET' '/api/tags' $null 5
+        $installed = @($tags.models | ForEach-Object { if ($_.name) { [string]$_.name } elseif ($_.model) { [string]$_.model } })
+        foreach ($name in @('qwen3-vl:4b-instruct','qwen3-vl:4b','qwen3-vl:2b-instruct','qwen3-vl:2b')) {
+            if ($installed -ccontains $name) { return $name }
+        }
+    } catch { return $null }
+    return $null
+}
+
 function Invoke-ChatModel($Payload) {
     if ($null -eq $Payload.messages -or $Payload.messages -isnot [array] -or
         $Payload.messages.Count -lt 1 -or $Payload.messages.Count -gt 60) {
         throw 'Хабарламалар тізімі жарамсыз.'
     }
     $msgs = @(@{role='system';content='You are a helpful assistant. Reply in the language of the user, preferably Kazakh. Do not invent facts. Be concise.'})
-    $total = 0
-    foreach ($m in $Payload.messages) {
+    $total = 0; $hasImage = $false
+    for ($i=0; $i -lt $Payload.messages.Count; $i++) {
+        $m = $Payload.messages[$i]
         if ($m.role -cnotin @('user','assistant') -or $m.content -isnot [string] -or
             $m.content.Length -lt 1 -or $m.content.Length -gt 4000) { throw 'Хабарлама жарамсыз.' }
         $total += $m.content.Length
-        $msgs += @{role=[string]$m.role;content=[string]$m.content}
+        $item = @{role=[string]$m.role;content=[string]$m.content}
+        if ($m.PSObject.Properties.Name -ccontains 'image') {
+            $photo = $m.image
+            if ($i -ne ($Payload.messages.Count-1) -or $m.role -cne 'user' -or
+                $null -eq $photo -or $photo.mime -cne 'image/jpeg' -or
+                $photo.data -isnot [string] -or $photo.data.Length -gt 200000 -or
+                $photo.data -cnotmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'Фото жарамсыз.' }
+            $item.images = @([string]$photo.data)
+            $hasImage = $true
+        }
+        $msgs += $item
     }
     if ($total -gt 16000 -or $Payload.messages[-1].role -cne 'user') { throw 'Сұрау тым ұзын немесе соңғы хабарлама user емес.' }
-    $request = @{model=[string]$script:TuzeConfig.model;messages=$msgs;stream=$false;think=$false;keep_alive='10m';
+    $model = if ($hasImage) { Get-VisionModel } else { [string]$script:TuzeConfig.model }
+    if (-not $model) { throw 'Фото чатта сақталды. Оны AI талдауы үшін «ollama pull qwen3-vl:4b-instruct» орындап, қайта жіберіңіз.' }
+    $request = @{model=$model;messages=$msgs;stream=$false;think=$false;keep_alive='10m';
         options=@{temperature=0.6;num_ctx=4096;num_predict=1024}}
     $response = Invoke-TuzeOllama 'POST' '/api/chat' $request ([int]$script:TuzeConfig.timeout_seconds)
     if ($response.done -cne $true -or $response.done_reason -eq 'length' -or
         $response.message.content -isnot [string] -or -not $response.message.content.Trim()) {
         throw 'Модель жауабы аяқталмады. Чаттағы сұрақ сақталған; қайталап көріңіз.'
     }
-    return @{text=[string]$response.message.content;model=[string]$script:TuzeConfig.model}
+    return @{text=[string]$response.message.content;model=$model}
 }
 
 $listener = $null
@@ -102,7 +126,11 @@ try {
                     $type=if ($path -eq '/') {'text/html; charset=utf-8'} elseif ($path -eq '/style.css') {'text/css; charset=utf-8'} else {'text/javascript; charset=utf-8'}
                     Send-Raw $stream 200 $type ([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $static[$path]))); continue
                 }
-                if ($method -eq 'GET' -and $path -eq '/api/health') { Send-Json $stream 200 (Get-TuzeHealth); continue }
+                if ($method -eq 'GET' -and $path -eq '/api/health') {
+                    $health=Get-TuzeHealth; $vision=Get-VisionModel
+                    $health.vision_ready=[bool]$vision; $health.vision_model=$vision
+                    Send-Json $stream 200 $health; continue
+                }
                 if ($method -eq 'GET' -and $path -eq '/api/local') { Send-Json $stream 200 @{files=@(Get-ChatFiles)}; continue }
                 $localMatch=[regex]::Match($path,'^/api/local/(chat_\d{3,}\.json)$')
                 if ($method -eq 'GET' -and $localMatch.Success) {
