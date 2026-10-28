@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Job, [string]$OllamaUrl='')
+﻿param([Parameter(Mandatory=$true)][string]$Job, [string]$OllamaUrl='')
 $ErrorActionPreference = 'Stop'
 if ($Job -cnotmatch '^[0-9a-f]{32}$') { throw 'Жұмыс нөмірі жарамсыз.' }
 $folder = Join-Path $env:LOCALAPPDATA 'TuzeStorage\jobs'

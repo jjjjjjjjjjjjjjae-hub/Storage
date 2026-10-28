@@ -1,4 +1,4 @@
-# TUZE account login. Credentials stay in GitHub CLI's protected credential storage.
+﻿# TUZE account login. Credentials stay in GitHub CLI's protected credential storage.
 # No user-provided tokens/passwords are accepted by the TUZE interface.
 Add-Type -AssemblyName System.Security
 $script:SecretFolder = Join-Path $env:LOCALAPPDATA 'TuzeStorage'

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot 'secrets.ps1')
 $script:LoginStatusPath = Join-Path $env:LOCALAPPDATA 'TuzeStorage\github-login-status.json'
