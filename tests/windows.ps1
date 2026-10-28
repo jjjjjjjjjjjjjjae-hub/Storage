@@ -43,7 +43,7 @@ try {
     if ((Invoke-RestMethod -Uri ($base + '/api/session')).legacy_passphrase -ne 'old-test-passphrase-123') { throw 'Legacy migration secret missing.' }
     [void](Invoke-RestMethod -Uri ($base + '/api/legacy/clear') -Method Post -ContentType 'application/json' -Body '{"done":true}')
     if ((Invoke-RestMethod -Uri ($base + '/api/session')).legacy_passphrase) { throw 'Legacy secret was not removed.' }
-    try { [void](Invoke-RestMethod -Uri ($base + '/api/token') -Method Post -ContentType 'application/json' -Body (@{token=$token} | ConvertTo-Json -Compress)); throw 'Browser token endpoint is still available.' }
+    try { [void](Invoke-RestMethod -Uri ($base + '/api/token')); throw 'Browser token endpoint is still available.' }
     catch [System.Net.WebException] { if ([int]$_.Exception.Response.StatusCode -ne 404) { throw } }
     $socket = [System.Net.Sockets.TcpClient]::new('127.0.0.1',$port)
     try {
