@@ -6,6 +6,7 @@ let store = null;
 let active = null;
 let busy = false;
 let proposal = null;
+let pendingImage = null;
 
 function message(text, error = false) {
   $('notice').textContent = text;
@@ -17,6 +18,8 @@ function setBusy(value) {
   busy = value;
   for (const id of ['new-chat','sync','send','tuze','unlock']) $(id).disabled = value;
   $('draft').disabled = value;
+  $('photo-input').disabled = value;
+  $('remove-photo').disabled = value;
 }
 function assertUnlocked() {
   if (!store) throw new Error('Алдымен кілтсөзді енгізіңіз.');
@@ -52,7 +55,15 @@ function renderChat() {
     const role = document.createElement('strong');
     role.textContent = item.role === 'user' ? 'Сен' : 'Qwen3';
     const body = document.createElement('p'); body.textContent = item.content;
-    entry.append(role, body); list.append(entry);
+    entry.append(role, body);
+    if (item.image) {
+      const photo = document.createElement('img');
+      photo.src = `data:image/jpeg;base64,${item.image.data}`;
+      photo.alt = 'Чатқа тіркелген фото';
+      photo.className = 'chat-photo';
+      entry.append(photo);
+    }
+    list.append(entry);
   }
   if (!active) list.textContent = 'Кілтсөзді енгізіп, чатты ашыңыз немесе жаңасын жасаңыз.';
   list.scrollTop = list.scrollHeight;
@@ -136,15 +147,19 @@ $('sync').addEventListener('click', () => run(async () => {
 
 $('send').addEventListener('click', () => run(async () => {
   assertUnlocked();
-  const text = $('draft').value.trim();
-  if (!text) throw new Error('Хабарлама жазыңыз.');
+  const image = pendingImage;
+  const text = $('draft').value.trim() || (image ? 'Бұл фотода не бар?' : '');
+  if (!text) throw new Error('Хабарлама жазыңыз немесе фото тіркеңіз.');
   if (text.length > 4000) throw new Error('Хабарлама 4000 таңбадан аспасын.');
   if (!active) active = await store.create();
-  active = await store.append(active.filename, 'user', text); // Local commit before model call.
+  active = await store.append(active.filename, 'user', text, image); // Local commit before model call.
+  const sentId = active.messages.at(-1).id;
   $('draft').value = ''; $('review').hidden = true; proposal = null;
+  pendingImage = null; $('photo-input').value = ''; showPendingPhoto();
   renderChat(); await renderList();
   await syncCurrent();
-  const context = active.messages.slice(-40).map(({role, content}) => ({role, content}));
+  const context = active.messages.slice(-40).map(({id, role, content, image}) =>
+    ({role, content, ...(id === sentId && image ? {image} : {})}));
   const response = await fetch('/api/chat', { method: 'POST',
     headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({messages: context}) });
   const data = await response.json();
@@ -152,6 +167,57 @@ $('send').addEventListener('click', () => run(async () => {
   active = await store.append(active.filename, 'assistant', data.text);
   renderChat(); await renderList(); await syncCurrent();
 }));
+
+function showPendingPhoto() {
+  $('photo-preview').replaceChildren();
+  $('photo-preview').hidden = !pendingImage;
+  $('remove-photo').hidden = !pendingImage;
+  if (!pendingImage) return;
+  const img = document.createElement('img');
+  img.src = `data:image/jpeg;base64,${pendingImage.data}`;
+  img.alt = 'Жіберілетін фото';
+  $('photo-preview').append(img);
+}
+
+async function preparePhoto(file) {
+  if (!file.type.startsWith('image/') || file.size > 12_000_000) {
+    throw new Error('12 МБ-тан кіші фото таңдаңыз.');
+  }
+  let bitmap;
+  try { bitmap = await createImageBitmap(file); }
+  catch { throw new Error('Бұл фото пішімі ашылмады. JPEG немесе PNG таңдаңыз.'); }
+  try {
+    for (const limit of [1024, 896, 768, 640]) {
+      const scale = Math.min(1, limit / Math.max(bitmap.width, bitmap.height));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+      canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+      canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      for (const quality of [0.78, 0.63, 0.48]) {
+        const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', quality));
+        if (!blob) throw new Error('Фотоны өңдеу мүмкін болмады.');
+        if (blob.size > 140_000) continue;
+        const bytes = new Uint8Array(await blob.arrayBuffer());
+        let binary = '';
+        for (let i = 0; i < bytes.length; i += 8192) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+        }
+        return {mime: 'image/jpeg', data: btoa(binary), width: canvas.width, height: canvas.height};
+      }
+    }
+    throw new Error('Фото тым күрделі: кішірек сурет таңдаңыз.');
+  } finally { bitmap.close(); }
+}
+
+$('photo-input').addEventListener('change', () => run(async () => {
+  const file = $('photo-input').files?.[0];
+  if (!file) return;
+  pendingImage = await preparePhoto(file);
+  showPendingPhoto();
+}));
+$('remove-photo').addEventListener('click', () => {
+  pendingImage = null; $('photo-input').value = ''; showPendingPhoto();
+});
 
 $('draft').addEventListener('keydown', event => {
   if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $('send').click(); }
@@ -182,7 +248,10 @@ $('dismiss').addEventListener('click', () => { $('review').hidden = true; propos
 
 async function health() {
   try { const res = await fetch('/api/health'); const data = await res.json();
-    $('model-status').textContent = data.ready ? `${data.model} · дайын` : data.message; }
+    $('model-status').textContent = data.ready ? `${data.model} · мәтін дайын` : data.message;
+    $('photo-status').textContent = data.vision_ready ?
+      `${data.vision_model} · фотоны талдайды` :
+      'Фото жіберіледі; талдау үшін qwen3-vl:4b-instruct орнатыңыз'; }
   catch { $('model-status').textContent = 'Ollama байланысы жоқ'; }
 }
 renderChat(); renderList().catch(error => message(error.message, true)); health();

@@ -137,3 +137,16 @@ test('GitHub Contents API uses encrypted base64 and SHA for updates', async () =
   assert.doesNotMatch(calls[2].options.body, /Құпия мәтін/);
   assert.equal(calls[2].options.headers.Authorization, 'Bearer test-token');
 });
+
+test('photo stays inside the same encrypted chat file and survives reopening', async () => {
+  const local = new MemoryLocal(); const store = new ChatStore(local, password);
+  const chat = await store.create();
+  const photo = {mime:'image/jpeg', width:1, height:1, data:Buffer.from([255,216,255,217]).toString('base64')};
+  await store.append(chat.filename, 'user', 'Бұл фотода не бар?', photo);
+  assert.deepEqual((await store.open(chat.filename)).messages[0].image, photo);
+  assert.deepEqual(await store.list(), ['chat_001.json']);
+  assert.doesNotMatch(JSON.stringify(await local.get(chat.filename)), /Бұл фотода не бар/);
+  const tooLarge = {...photo, data:'A'.repeat(200004)};
+  await assert.rejects(store.append(chat.filename,'user','Фото',tooLarge), /Фото пішімі/);
+  assert.equal((await store.open(chat.filename)).messages.length, 1);
+});
