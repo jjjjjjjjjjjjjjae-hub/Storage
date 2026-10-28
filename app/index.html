@@ -3,40 +3,60 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>Tuze Chat · жергілікті AI</title>
+  <meta name="theme-color" content="#ffffff">
+  <title>TUZE — AI Chat</title>
   <link rel="stylesheet" href="/style.css">
   <script type="module" src="/app.mjs"></script>
 </head>
 <body>
-  <header><div class="brand">TUZE<span>.</span> <small>AI Chat</small></div><div id="model-status">Ollama тексерілуде…</div></header>
-  <main>
-    <aside>
-      <div class="aside-head"><h2>Чаттар</h2><button id="new-chat" type="button">+ Жаңа чат</button></div>
-      <div id="chat-list" aria-label="Чаттар тізімі"></div>
-      <section class="secure">
-        <h3>Автоматты сақтау</h3>
-        <p id="lock-status">Кілт дайындалуда…</p><p id="sync-status">Чаттар ноутбукқа шифрланып сақталады.</p>
-        <p class="privacy">Баптау бөлек <b>Storage-Settings.cmd</b> файлы арқылы жасалады.</p>
-      </section>
-    </aside>
-    <section class="conversation">
-      <div class="chat-head"><h1 id="chat-title">Чатты таңдаңыз</h1><span id="chat-file"></span></div>
-      <div id="messages" class="messages" aria-live="polite"></div>
-      <div id="notice" class="notice" role="alert" hidden></div>
-      <section id="review" class="review" hidden>
-        <div class="review-head"><h2>Tuze өзгерісі</h2><span>Қолданбас бұрын тексеріңіз</span></div>
-        <div id="difference"></div><p id="review-note"></p>
-        <div class="row"><button id="apply" type="button">Өзгерісті қолдану</button><button id="dismiss" type="button">Қалдыру</button></div>
-      </section>
-      <div class="composer">
-        <label for="draft">Хабарлама</label>
-        <textarea id="draft" rows="4" maxlength="4000" placeholder="Хабарлама жаз немесе фото тірке…"></textarea>
-        <div class="photo-tools"><label class="photo-button" for="photo-input">📷 Фото қосу</label><input id="photo-input" type="file" accept="image/*"><div id="photo-preview" hidden></div><button id="remove-photo" type="button" hidden>Фотосыз жіберу ✕</button></div>
-        <div class="actions"><div class="row"><select id="tuze-mode" aria-label="Tuze режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select><small id="tuze-status">Tuze өзі тексереді</small></div><button id="send" type="button" class="primary">Жіберу ↗</button></div>
-        <small id="photo-status">Фотоны талдау үшін vision модель тексерілуде…</small><br>
-        <small>Ctrl+Enter — жіберу. Жіберген хабарлама модельге бармай тұрып сақталады.</small>
+  <div class="app-shell">
+    <aside id="sidebar" class="sidebar" aria-label="Чаттар">
+      <div class="side-top">
+        <div class="side-logo" aria-label="TUZE"><span class="mark">✦</span><span>TUZE</span><span class="side-edition">AI</span></div>
+        <button type="button" id="collapse" class="icon-button" aria-label="Бүйірлік панельді жабу" title="Панельді жабу">☰</button>
       </div>
-    </section>
-  </main>
+      <button id="new-chat" class="new-chat" type="button"><span class="new-icon">✎</span> Жаңа чат <span class="new-shortcut">＋</span></button>
+      <div class="search-wrap"><span aria-hidden="true">⌕</span><input id="search" type="search" placeholder="Чатты іздеу" aria-label="Чатты іздеу"></div>
+      <div class="side-section-name">Чаттар тарихы</div>
+      <nav id="chat-list" class="chat-list" aria-label="Бұрынғы чаттар"></nav>
+      <div class="side-bottom">
+        <div class="save-status"><span class="sync-indicator"></span><span id="sync-status">GitHub тексерілуде…</span></div>
+        <button id="account-button" class="account-button" type="button" title="GitHub аккаунты"><span class="avatar">G</span><span class="account-info"><b id="account-name">GitHub</b><small id="account-detail">Аккаунтқа кіру</small></span><span class="account-more">···</span></button>
+      </div>
+    </aside>
+    <main id="main" class="main">
+      <header class="topbar">
+        <div class="top-left"><button id="expand" class="icon-button" type="button" aria-label="Чаттар панелін ашу" title="Панельді ашу" hidden>☰</button><span class="top-title">TUZE <span class="model-chevron">⌄</span></span><span class="model-badge" id="model-status">Модель тексерілуде</span></div>
+        <div class="top-actions"><button id="theme" class="icon-button" type="button" title="Тақырыпты ауыстыру" aria-label="Тақырыпты ауыстыру">◐</button><button id="new-chat-top" class="icon-button" type="button" title="Жаңа чат" aria-label="Жаңа чат">✎</button></div>
+      </header>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <div id="messages" class="messages" aria-live="polite">
+        <div class="empty-state"><div class="hero-mark">✳</div><h1>Бүгін неден бастаймыз?</h1><p>gpt-oss:20b · жергілікті TUZE</p></div>
+      </div>
+      <div class="input-dock">
+        <section id="logo-panel" class="logo-panel" aria-label="Logo&AI тапсырманы түсіндіру" hidden>
+          <div class="logo-head"><div class="logo-brand"><span class="logo-spark">✧</span><div><strong>Logo&AI</strong><small>Түсіну → Сұрақ → Ағылшынша нұсқа</small></div></div><button id="logo-close" type="button" aria-label="Logo&AI жабу" title="Жабу">✕</button></div>
+          <p id="logo-status" class="logo-status" role="status">Алдымен ойыңды түсіндіріп алайық.</p>
+          <p id="logo-understanding" class="logo-understanding" hidden></p>
+          <div id="logo-questions" class="logo-questions" hidden></div>
+          <label for="logo-prompt" class="logo-prompt-label" hidden>gpt-oss:20b үшін дайын ағылшынша тапсырма (өзгертуге болады)</label>
+          <textarea id="logo-prompt" rows="5" maxlength="3600" spellcheck="false" aria-label="gpt-oss:20b үшін ағылшынша тапсырма" hidden></textarea>
+          <div class="logo-actions"><button id="logo-build" type="button" class="logo-secondary" hidden>Жауаптарды ескеріп дайындау</button><button id="logo-send" type="button" class="logo-primary" hidden>gpt-oss:20b-ге жіберу ↑</button></div>
+        </section>
+        <section id="review" class="review" hidden><div class="review-head"><strong>Tuze түзету ұсынысы</strong><button id="dismiss" type="button" aria-label="Жабу">✕</button></div><div id="difference"></div><p id="review-note"></p><button id="apply" type="button" class="apply-button">Өзгерісті қолдану</button></section>
+        <div class="composer">
+          <div class="attached-photo"><div id="photo-preview" hidden></div><button id="remove-photo" type="button" hidden aria-label="Фотоны алып тастау">✕</button></div>
+          <textarea id="draft" rows="1" maxlength="4000" aria-label="Хабарлама" placeholder="TUZE-ге хабарлама жаз…"></textarea>
+          <div class="composer-toolbar"><div class="composer-tools"><label class="attach-btn" for="photo-input" title="Фото қосу" aria-label="Фото қосу">＋</label><input id="photo-input" type="file" accept="image/*"><button id="correct-toggle" type="button" class="mode-button" aria-pressed="true" title="Қателерді автоматты түзету">✦ Авто</button><button id="correct-now" type="button" class="mode-button" title="Мәтіндегі қателерді қазір түзету">Түзету</button><button id="logo-ai" type="button" class="mode-button logo-launch" title="Сұрақтар арқылы тапсырманы түсініп, gpt-oss:20b үшін ағылшын тіліне аударады">✧ Logo&AI</button><select id="tuze-mode" aria-label="Түзету режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select></div><button id="send" type="button" class="send-button" aria-label="Хабарлама жіберу" title="Жіберу">↑</button></div>
+        </div>
+        <div id="tuze-status" class="composer-foot">TUZE қателерді тексереді · Enter — жіберу · Shift+Enter — жаңа жол</div>
+        <small id="photo-status" class="sr-only">Фото моделі тексерілуде</small>
+        <span id="chat-title" hidden></span><span id="chat-file" hidden></span><span id="lock-status" hidden></span>
+      </div>
+    </main>
+  </div>
+  <div id="login-screen" class="login-screen" hidden>
+    <div class="login-card"><span class="login-logo">✳</span><h1>TUZE-ге қош келдің!</h1><p>Чаттарың GitHub аккаунтыңмен байланысады. Басқа кілт, пароль немесе токен енгізудің қажеті жоқ.</p><button id="login" class="login-button" type="button"><svg viewBox="0 0 24 24" width="19" height="19" fill="currentColor" aria-hidden="true"><path d="M12 .8a11.2 11.2 0 0 0-3.54 21.83c.56.1.76-.25.76-.54v-2.1c-3.09.67-3.74-1.31-3.74-1.31-.5-1.27-1.23-1.62-1.23-1.62-1-.69.08-.68.08-.68 1.1.08 1.68 1.13 1.68 1.13.98 1.68 2.57 1.2 3.2.92.1-.7.39-1.2.7-1.48-2.47-.28-5.07-1.24-5.07-5.53 0-1.22.44-2.22 1.15-3.01-.12-.28-.5-1.43.11-2.98 0 0 .94-.3 3.08 1.15a10.7 10.7 0 0 1 5.6 0c2.14-1.45 3.08-1.15 3.08-1.15.61 1.55.23 2.7.11 2.98.72.79 1.15 1.79 1.15 3.01 0 4.3-2.6 5.25-5.08 5.52.4.34.75 1 .75 2.02v3c0 .3.2.65.77.54A11.2 11.2 0 0 0 12 .8z"/></svg> GitHub арқылы кіру</button><a href="https://github.com/signup" class="signup-link" target="_blank" rel="noopener noreferrer">GitHub аккаунтын тіркеу</a><div id="login-hint" class="login-hint">Бұрын тіркелсең, GitHub арқылы кір. Жаңа аккаунт үшін «тіркеу» сілтемесін бас.</div><div class="login-privacy">Жаңа чаттар <b>Tuze-Private-Chats</b> жеке репозиторийінде сақталады.</div></div>
+  </div>
 </body>
 </html>

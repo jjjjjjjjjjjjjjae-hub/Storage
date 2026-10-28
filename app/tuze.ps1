@@ -1,11 +1,12 @@
 ﻿# TUZE core; Windows PowerShell 5.1 and newer. No Python modules.
 function Initialize-Tuze([string]$OllamaUrl = '') {
     $script:TuzeConfig = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'config.json') -Encoding UTF8 -Raw | ConvertFrom-Json
+    if ($env:TUZE_SELECTED_MODEL -and $env:TUZE_SELECTED_MODEL -ceq 'gpt-oss:20b') { $script:TuzeConfig.model = $env:TUZE_SELECTED_MODEL }
     $script:TuzePrompt = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tuze-prompt.txt') -Encoding UTF8 -Raw
     $script:TuzeSchema = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'tuze-schema.json') -Encoding UTF8 -Raw | ConvertFrom-Json
     $script:TuzeUrl = if ($OllamaUrl) { $OllamaUrl.TrimEnd('/') } else { ([string]$script:TuzeConfig.ollama_url).TrimEnd('/') }
     if ($script:TuzeUrl -notmatch '^http://(?:127\.0\.0\.1|localhost):\d+$') { throw 'Ollama адресі тек жергілікті болуы керек.' }
-    if ([string]$script:TuzeConfig.model -notmatch '^qwen3:4b(?:-|$)') { throw 'Модель Qwen3 4B тегінің бірі болуы керек.' }
+    if ([string]$script:TuzeConfig.model -cne 'gpt-oss:20b') { throw 'Модель gpt-oss:20b болуы керек.' }
 }
 
 function Invoke-TuzeOllama([string]$Method, [string]$Path, $Body = $null, [int]$Timeout = 5) {
@@ -42,9 +43,9 @@ function Get-TuzeHealth {
         $data = Invoke-TuzeOllama 'GET' '/api/tags' $null 5
         $names = @($data.models | ForEach-Object { [string]$_.name })
         $ready = $names -ccontains [string]$script:TuzeConfig.model
-        return @{ ready = $ready; model = [string]$script:TuzeConfig.model; available_models = $names; message = $(if ($ready) { 'Модель дайын.' } else { 'qwen3:4b моделі табылмады. Start-Tuze.cmd ашыңыз.' }) }
+        return @{ ready = $ready; model = [string]$script:TuzeConfig.model; available_models = $names; message = $(if ($ready) { 'Модель дайын.' } else { 'gpt-oss:20b моделі табылмады. ollama list орындап тексеріңіз.' }) }
     } catch {
-        return @{ ready = $false; model = [string]$script:TuzeConfig.model; available_models = @(); message = 'Ollama-ға қосыла алмадым. Start-Tuze.cmd ашыңыз.' }
+        return @{ ready = $false; model = [string]$script:TuzeConfig.model; available_models = @(); message = 'Ollama-ға қосыла алмадым. Start-Storage.cmd файлын іске қосыңыз.' }
     }
 }
 
@@ -140,7 +141,7 @@ function Invoke-TuzeCorrection([string]$Text, [string]$Mode) {
     $keep = @(Get-TuzeMatches $Text '[\p{L}]+') | Where-Object { $_ -match '(?i)^(?=.{4,}$)[\p{L}]+?(?:ма|ме|ба|бе|па|пе)(?:й(?:мын|мін|м|мыз|міз|сың|сің|сыз|сіз)|д[ыіи](?:м|ң)?|ған[\p{L}]*|ген[\p{L}]*)$' }
     $userData = @{mode=$Mode; text=$Text; keep_exactly=@($keep)} | ConvertTo-Json -Depth 6 -Compress
     $request = @{
-        model=$model; stream=$false; think=$false; format=$script:TuzeSchema; keep_alive='10m'
+        model=$model; stream=$false; think='low'; format=$script:TuzeSchema; keep_alive='10m'
         messages=@(@{role='system';content=($script:TuzePrompt + "`nJSON schema: " + (ConvertTo-Json -InputObject $script:TuzeSchema -Depth 10 -Compress))}, @{role='user';content=$userData})
         options=@{temperature=0.2; top_p=0.8; top_k=20; min_p=0; repeat_penalty=1.1; seed=42; num_ctx=[int]$script:TuzeConfig.num_ctx; num_predict=[int]$script:TuzeConfig.num_predict}
     }

@@ -5,7 +5,7 @@ const server = http.createServer(async (req, res) => {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   if (req.method === 'GET' && req.url === '/api/tags') {
     res.end(JSON.stringify({models: [
-      {name: 'qwen3:4b-instruct'}, {name: 'qwen3-vl:4b-instruct'},
+      {name: 'gpt-oss:20b'}, {name: 'qwen3-vl:4b-instruct'},
     ]}));
     return;
   }
@@ -14,12 +14,26 @@ const server = http.createServer(async (req, res) => {
     for await (const chunk of req) raw += chunk;
     const data = JSON.parse(raw);
     const last = data.messages.at(-1);
+    const photo = Array.isArray(last.images) && last.images.length === 1;
+    if (!photo && data.think !== 'low') {
+      res.statusCode=400;res.end(JSON.stringify({error:'gpt-oss:20b requires low reasoning mode'}));return;
+    }
+    // Ensure both correction and Logo&AI use the selected gpt-oss:20b model.
+    if (data.format && data.model !== 'gpt-oss:20b') {
+      res.statusCode=400;res.end(JSON.stringify({error:'Structured job used wrong model'}));return;
+    }
     if (data.format) {
-      res.end(JSON.stringify({done:true, done_reason:'stop', message:{content:JSON.stringify({corrected_text:'Сәлем, әлем!',uncertain:false})}}));
+      let output;
+      if (data.format.properties?.prompt_en) {
+        const request = JSON.parse(last.content);
+        output = request.stage === 'build'
+          ? {interpreted_kk:'Құрылғылар бөлімінің анимациясын тегістеу',questions:[],prompt_en:'Improve the animation in the Devices section. Respond in Kazakh.',uncertain:false}
+          : {interpreted_kk:'Сайт анимациясын жақсарту',questions:['Қай бөлімді өзгертейін?'],prompt_en:'Improve website animation. Section unspecified. Respond in Kazakh.',uncertain:true};
+      } else output = {corrected_text:'Сәлем, әлем!',uncertain:false};
+      res.end(JSON.stringify({done:true,done_reason:'stop',message:{content:JSON.stringify(output)}}));
       return;
     }
-    const photo = Array.isArray(last.images) && last.images.length === 1;
-    const accepted = photo ? data.model === 'qwen3-vl:4b-instruct' : data.model === 'qwen3:4b-instruct';
+    const accepted = photo ? data.model === 'qwen3-vl:4b-instruct' : data.model === 'gpt-oss:20b';
     res.statusCode = accepted ? 200 : 400;
     res.end(JSON.stringify(accepted ? {done:true, done_reason:'stop', message:{content: photo ? 'Фото көрінді' : 'Мәтін көрінді'}} : {error:'Wrong model or image format'}));
     return;

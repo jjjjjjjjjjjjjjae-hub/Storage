@@ -1,101 +1,55 @@
-﻿# Secrets are protected for the current Windows user. Never commit these files.
+# TUZE account login. Credentials stay in GitHub CLI's protected credential storage.
+# No user-provided tokens/passwords are accepted by the TUZE interface.
 Add-Type -AssemblyName System.Security
 $script:SecretFolder = Join-Path $env:LOCALAPPDATA 'TuzeStorage'
 [void][System.IO.Directory]::CreateDirectory($script:SecretFolder)
 $script:SecretEntropy = [System.Text.Encoding]::UTF8.GetBytes('TuzeStorage-DPAPI-v1')
-$script:SecretScope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
-
-function Read-TuzeSecret([string]$Name) {
-    if ($Name -cnotin @('master','github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
-    $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
+function Read-LegacyTuzeMaster {
+    $path = Join-Path $script:SecretFolder 'master.dpapi'
     if (-not [System.IO.File]::Exists($path)) { return $null }
     try {
-        $protected = [System.IO.File]::ReadAllBytes($path)
-        $plain = [System.Security.Cryptography.ProtectedData]::Unprotect($protected,$script:SecretEntropy,$script:SecretScope)
+        $bytes = [System.IO.File]::ReadAllBytes($path)
+        $plain = [System.Security.Cryptography.ProtectedData]::Unprotect($bytes,$script:SecretEntropy,[System.Security.Cryptography.DataProtectionScope]::CurrentUser)
         return [System.Text.Encoding]::UTF8.GetString($plain)
-    } catch { throw 'Windows кілтін аша алмадым. Файлдар өзгертілмеді; қалпына келтіру кілтін пайдаланыңыз.' }
+    } catch { return $null }
 }
-
-function Write-TuzeSecret([string]$Name,[string]$Value) {
-    if ($Name -cnotin @('master','github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
-    $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
-    $plain = [System.Text.Encoding]::UTF8.GetBytes($Value)
-    $protected = [System.Security.Cryptography.ProtectedData]::Protect($plain,$script:SecretEntropy,$script:SecretScope)
-    $temp = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
+function Find-TuzeGh {
+    foreach ($commandName in @('gh.exe','gh')) {
+        $found = Get-Command $commandName -CommandType Application -ErrorAction SilentlyContinue
+        if ($found -and [System.IO.File]::Exists($found.Source)) { return [string]$found.Source }
+    }
+    $paths = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($root in @($env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:LOCALAPPDATA, $env:USERPROFILE)) {
+        if (-not $root) { continue }
+        foreach ($suffix in @('GitHub CLI\gh.exe','Programs\GitHub CLI\gh.exe',
+            'Microsoft\WinGet\Links\gh.exe','scoop\apps\gh\current\bin\gh.exe',
+            'scoop\shims\gh.exe')) {
+            [void]$paths.Add((Join-Path $root $suffix))
+        }
+    }
+    foreach ($path in $paths) {
+        if ([System.IO.File]::Exists($path)) { return $path }
+    }
+    # winget installs sometimes do not update the PATH of a running TUZE process.
+    $wingetRoots = @((Join-Path $env:LOCALAPPDATA 'Microsoft\WinGet\Packages'))
+    if ($env:ProgramFiles) { $wingetRoots += (Join-Path $env:ProgramFiles 'WinGet\Packages') }
+    foreach ($root in $wingetRoots) {
+        if (-not [System.IO.Directory]::Exists($root)) { continue }
+        foreach ($dir in @(Get-ChildItem -LiteralPath $root -Directory -Filter 'GitHub.cli*' -ErrorAction SilentlyContinue)) {
+            $found = Get-ChildItem -LiteralPath $dir.FullName -File -Filter 'gh.exe' -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($found) { return [string]$found.FullName }
+        }
+    }
+    return $null
+}
+function Get-GitHubAuthToken {
+    $gh = Find-TuzeGh
+    if (-not $gh) { return $null }
     try {
-        $stream = [System.IO.FileStream]::new($temp,[System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::Write,[System.IO.FileShare]::None,4096,[System.IO.FileOptions]::WriteThrough)
-        try { $stream.Write($protected,0,$protected.Length); $stream.Flush($true) }
-        finally { $stream.Dispose() }
-        if ([System.IO.File]::Exists($path)) {
-            [System.IO.File]::Replace($temp,$path,$path+'.bak.'+[guid]::NewGuid().ToString('N'),$true)
-        } else { [System.IO.File]::Move($temp,$path) }
-    } finally { if ([System.IO.File]::Exists($temp)) { [System.IO.File]::Delete($temp) } }
-}
-
-function Get-TuzeMaster {
-    $mutex = [System.Threading.Mutex]::new($false,'Local\TuzeStorageMasterKey')
-    $entered = $false
-    try {
-        try { $entered = $mutex.WaitOne(10000) }
-        catch [System.Threading.AbandonedMutexException] { $entered = $true }
-        if (-not $entered) { throw 'Кілтті күту уақыты бітті.' }
-        $existing = Read-TuzeSecret 'master'
-        if ($existing) { return $existing }
-        $bytes = [byte[]]::new(32)
-        $rng = [System.Security.Cryptography.RandomNumberGenerator]::Create()
-        try { $rng.GetBytes($bytes) } finally { $rng.Dispose() }
-        $master = [Convert]::ToBase64String($bytes)
-        Write-TuzeSecret 'master' $master
-        return $master
-    } finally { if ($entered) { $mutex.ReleaseMutex() }; $mutex.Dispose() }
-}
-
-function Import-TuzeMaster([string]$Master) {
-    try { $bytes = [Convert]::FromBase64String($Master) }
-    catch { throw 'Қалпына келтіру кілті жарамсыз.' }
-    if ($bytes.Length -ne 32) { throw 'Қалпына келтіру кілті 32 байт болуы керек.' }
-    Write-TuzeSecret 'master' $Master
-    return @{ imported = $true }
-}
-
-function Save-GitHubToken([string]$Token) {
-    if ($Token.Length -lt 20 -or $Token.Length -gt 512 -or $Token -match '\s') {
-        throw 'GitHub токені жарамсыз.'
-    }
-    Write-TuzeSecret 'github-token' $Token
-    return @{ saved = $true }
-}
-
-function Save-LegacyPassphrase([string]$Passphrase) {
-    if ($Passphrase.Length -lt 12 -or $Passphrase.Length -gt 512) {
-        throw 'Ескі кілтсөз 12–512 таңба болуы керек.'
-    }
-    Write-TuzeSecret 'legacy-passphrase' $Passphrase
-    return @{ saved = $true }
-}
-
-function Remove-TuzeSecret([string]$Name) {
-    if ($Name -cnotin @('github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
-    $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
-    if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }
-    return @{ removed = $true }
-}
-
-# gh performs a one-time browser login and manages its own credential refresh.
-# Keep the manually entered PAT as a fallback for machines without GitHub CLI.
-function Get-GitHubAuthToken([string]$GhCommand = 'gh') {
-    $gh = Get-Command $GhCommand -CommandType Application -ErrorAction SilentlyContinue
-    if ($gh) {
-        try {
-            $lines = @(& $gh.Source auth token --hostname github.com 2>$null)
-            if ($LASTEXITCODE -eq 0 -and $lines.Count -eq 1) {
-                $token = ([string]$lines[0]).Trim()
-                if ($token.Length -ge 20 -and $token.Length -le 512 -and $token -notmatch '\s') {
-                    return $token
-                }
-            }
-        } catch { }
-    }
-    return Read-TuzeSecret 'github-token'
+        $lines = @(& $gh auth token --hostname github.com 2>$null)
+        if ($LASTEXITCODE -ne 0 -or $lines.Count -ne 1) { return $null }
+        $token = ([string]$lines[0]).Trim()
+        if ($token.Length -ge 12 -and $token.Length -le 512 -and $token -notmatch '\s') { return $token }
+    } catch { }
+    return $null
 }

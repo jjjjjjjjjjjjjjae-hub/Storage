@@ -1,4 +1,4 @@
-﻿# Encrypted envelopes only. Plaintext, passphrase and GitHub token never enter this module.
+﻿# Private GitHub account mode: JSON v3 local files and read-only legacy v2 support.
 $script:ChatFolder = Join-Path $env:LOCALAPPDATA 'TuzeStorage\chats'
 if (-not (Test-Path -LiteralPath $script:ChatFolder)) {
     [void][System.IO.Directory]::CreateDirectory($script:ChatFolder)
@@ -18,9 +18,9 @@ function Read-ChatEnvelope([string]$Filename) {
     if (-not [System.IO.File]::Exists($path)) { return $null }
     try {
         $data = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
-        if ($data.filename -cne $Filename -or $data.schema_version -ne 2) { throw 'Файл сәйкеспейді.' }
+        if ($data.filename -cne $Filename -or $data.schema_version -notin @(2,3)) { throw 'Файл сәйкеспейді.' }
         return $data
-    } catch { throw 'Жергілікті шифрланған файлды оқу мүмкін емес; сақтауды тоқтаттым.' }
+    } catch { throw 'Жергілікті чат файлын оқу мүмкін емес; сақтауды тоқтаттым.' }
 }
 
 function Get-ChatFiles {
@@ -31,17 +31,24 @@ function Get-ChatFiles {
 
 function Assert-Envelope($Envelope, [string]$Filename) {
     if ($null -eq $Envelope -or $Envelope -isnot [pscustomobject] -or
-        $Envelope.schema_version -ne 2 -or $Envelope.filename -cne $Filename -or
+        $Envelope.schema_version -ne 3 -or $Envelope.filename -cne $Filename -or
         [string]$Envelope.id -cnotmatch '^[0-9a-fA-F-]{36}$' -or
         [string]$Envelope.version -cnotmatch '^[0-9a-fA-F-]{36}$' -or
-        $null -eq $Envelope.encryption -or
-        $Envelope.encryption.algorithm -cne 'AES-256-GCM' -or
-        $Envelope.encryption.kdf -cne 'PBKDF2-HMAC-SHA256' -or
-        $Envelope.encryption.iterations -ne 600000 -or
-        [string]$Envelope.encryption.salt -cnotmatch '^[A-Za-z0-9+/=]+$' -or
-        [string]$Envelope.encryption.nonce -cnotmatch '^[A-Za-z0-9+/=]+$' -or
-        [string]$Envelope.encryption.ciphertext -cnotmatch '^[A-Za-z0-9+/=]+$') {
-        throw 'Шифрланған файл пішімі жарамсыз.'
+        $Envelope.title -isnot [string] -or $Envelope.title.Length -gt 200 -or
+        $Envelope.created_at -isnot [string] -or $Envelope.updated_at -isnot [string] -or
+        $null -eq $Envelope.messages -or $Envelope.messages -isnot [array] -or
+        $Envelope.messages.Count -gt 10000) {
+        throw 'Чат JSON v3 пішімі жарамсыз.'
+    }
+    foreach ($m in $Envelope.messages) {
+        if ($m.role -cnotin @('user','assistant') -or
+            [string]$m.id -cnotmatch '^[0-9a-fA-F-]{36}$' -or
+            $m.content -isnot [string] -or
+            $m.content.Length -gt $(if ($m.role -ceq 'assistant') { 40000 } else { 4000 }) -or
+            $m.created_at -isnot [string]) { throw 'Хабарлама жарамсыз.' }
+        if ($null -ne $m.image -and ($m.role -cne 'user' -or $m.image.mime -cne 'image/jpeg' -or
+            $m.image.data -isnot [string] -or $m.image.data.Length -gt 200000 -or
+            $m.image.data -cnotmatch '^[A-Za-z0-9+/]+={0,2}$')) { throw 'Фото жарамсыз.' }
     }
 }
 

@@ -5,8 +5,8 @@ try {
     $config = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'app\config.json') -Raw -Encoding UTF8 | ConvertFrom-Json
     $model = [string]$config.model
     $ollamaUrl = ([string]$config.ollama_url).TrimEnd('/')
-    if ($model -notmatch '^qwen3:4b(?:-|$)' -or $ollamaUrl -notmatch '^http://(?:127\.0\.0\.1|localhost):\d+$') {
-        throw 'config.json: Qwen3 4B тегін және жергілікті Ollama адресін көрсетіңіз.'
+    if ($model -cne 'gpt-oss:20b' -or $ollamaUrl -notmatch '^http://(?:127\.0\.0\.1|localhost):\d+$') {
+        throw 'config.json: gpt-oss:20b моделін және жергілікті Ollama адресін көрсетіңіз.'
     }
 
     $command = Get-Command ollama.exe -ErrorAction SilentlyContinue
@@ -42,8 +42,9 @@ try {
     $installed = @($tags.models | ForEach-Object { if ($_.name) { [string]$_.name } elseif ($_.model) { [string]$_.model } })
     if ($installed -cnotcontains $model) {
         Write-Host ('Орнатылған модельдер: ' + ($installed -join ', '))
-        throw ('Таңдалған ' + $model + ' моделі орнатылмаған. config.json ішіндегі model мәнін ollama list көрсеткен нақты тегке теңестіріңіз. Tuze ештеңе жүктемейді.')
+        throw 'gpt-oss:20b табылмады. Терминалда: ollama list орындаңыз. Модель автоматты жүктелмейді.'
     }
+    $env:TUZE_SELECTED_MODEL = $model
     Write-Host ('Қолданылатын модель: ' + $model)
     & (Join-Path $PSScriptRoot 'app\server.ps1') -OllamaUrl $ollamaUrl
 } catch {

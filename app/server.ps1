@@ -4,14 +4,18 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'local.ps1')
 . (Join-Path $PSScriptRoot 'secrets.ps1')
 Initialize-Tuze $OllamaUrl
+$script:JobFolder = Join-Path $env:LOCALAPPDATA 'TuzeStorage\jobs'
+[void][System.IO.Directory]::CreateDirectory($script:JobFolder)
 $encoding = [System.Text.UTF8Encoding]::new($false, $true)
 
-function Send-Raw($Stream, [int]$Status, [string]$Type, [byte[]]$Body) {
+function Send-Raw($Stream, [int]$Status, [string]$Type, [byte[]]$Body, [string]$CustomCsp = '') {
     $reasons = @{200='OK';400='Bad Request';403='Forbidden';404='Not Found';409='Conflict';
         411='Length Required';413='Payload Too Large';415='Unsupported Media Type';
         422='Unprocessable Entity';500='Internal Server Error';503='Service Unavailable'}
     $reason = $reasons[$Status]
-    $csp = "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; base-uri 'none'; form-action 'none'"
+    $csp = if ($CustomCsp) { $CustomCsp } else {
+        "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://api.github.com; frame-src 'self'; base-uri 'none'; form-action 'none'"
+    }
     $head = "HTTP/1.1 $Status $reason`r`nContent-Type: $Type`r`nContent-Length: $($Body.Length)`r`nConnection: close`r`nCache-Control: no-store`r`nX-Content-Type-Options: nosniff`r`nContent-Security-Policy: $csp`r`n`r`n"
     $h = [System.Text.Encoding]::ASCII.GetBytes($head)
     $Stream.Write($h, 0, $h.Length)
@@ -24,53 +28,7 @@ function Send-Json($Stream, [int]$Status, $Data) {
     Send-Raw $Stream $Status 'application/json; charset=utf-8' $body
 }
 
-function Get-VisionModel {
-    try {
-        $tags = Invoke-TuzeOllama 'GET' '/api/tags' $null 5
-        $installed = @($tags.models | ForEach-Object { if ($_.name) { [string]$_.name } elseif ($_.model) { [string]$_.model } })
-        foreach ($name in @('qwen3-vl:4b-instruct','qwen3-vl:4b','qwen3-vl:2b-instruct','qwen3-vl:2b')) {
-            if ($installed -ccontains $name) { return $name }
-        }
-    } catch { return $null }
-    return $null
-}
-
-function Invoke-ChatModel($Payload) {
-    if ($null -eq $Payload.messages -or $Payload.messages -isnot [array] -or
-        $Payload.messages.Count -lt 1 -or $Payload.messages.Count -gt 60) {
-        throw 'Хабарламалар тізімі жарамсыз.'
-    }
-    $msgs = @(@{role='system';content='You are a helpful assistant. Reply in the language of the user, preferably Kazakh. Do not invent facts. Be concise.'})
-    $total = 0; $hasImage = $false
-    for ($i=0; $i -lt $Payload.messages.Count; $i++) {
-        $m = $Payload.messages[$i]
-        if ($m.role -cnotin @('user','assistant') -or $m.content -isnot [string] -or
-            $m.content.Length -lt 1 -or $m.content.Length -gt 4000) { throw 'Хабарлама жарамсыз.' }
-        $total += $m.content.Length
-        $item = @{role=[string]$m.role;content=[string]$m.content}
-        if ($m.PSObject.Properties.Name -ccontains 'image') {
-            $photo = $m.image
-            if ($i -ne ($Payload.messages.Count-1) -or $m.role -cne 'user' -or
-                $null -eq $photo -or $photo.mime -cne 'image/jpeg' -or
-                $photo.data -isnot [string] -or $photo.data.Length -gt 200000 -or
-                $photo.data -cnotmatch '^[A-Za-z0-9+/]+={0,2}$') { throw 'Фото жарамсыз.' }
-            $item.images = @([string]$photo.data)
-            $hasImage = $true
-        }
-        $msgs += $item
-    }
-    if ($total -gt 16000 -or $Payload.messages[-1].role -cne 'user') { throw 'Сұрау тым ұзын немесе соңғы хабарлама user емес.' }
-    $model = if ($hasImage) { Get-VisionModel } else { [string]$script:TuzeConfig.model }
-    if (-not $model) { throw 'Фото чатта сақталды. Оны AI талдауы үшін «ollama pull qwen3-vl:4b-instruct» орындап, қайта жіберіңіз.' }
-    $request = @{model=$model;messages=$msgs;stream=$false;think=$false;keep_alive='10m';
-        options=@{temperature=0.6;num_ctx=4096;num_predict=1024}}
-    $response = Invoke-TuzeOllama 'POST' '/api/chat' $request ([int]$script:TuzeConfig.timeout_seconds)
-    if ($response.done -cne $true -or $response.done_reason -eq 'length' -or
-        $response.message.content -isnot [string] -or -not $response.message.content.Trim()) {
-        throw 'Модель жауабы аяқталмады. Чаттағы сұрақ сақталған; қайталап көріңіз.'
-    }
-    return @{text=[string]$response.message.content;model=$model}
-}
+. (Join-Path $PSScriptRoot 'chat-model.ps1')
 
 $listener = $null
 for ($candidate=$Port; $candidate -lt ($Port+20); $candidate++) {
@@ -129,10 +87,18 @@ try {
                     Send-Json $stream 403 @{error='Басқа сайттан сұрауға рұқсат жоқ.'}; continue
                 }
                 $static = @{ '/'='index.html'; '/app.mjs'='app.mjs'; '/crypto.mjs'='crypto.mjs';
-                    '/store.mjs'='store.mjs'; '/style.css'='style.css' }
+                    '/store.mjs'='store.mjs'; '/style.css'='style.css';
+                    '/code-files.mjs'='code-files.mjs'; '/code-workspace.mjs'='code-workspace.mjs' }
                 if ($method -eq 'GET' -and $static.ContainsKey($path)) {
                     $type=if ($path -eq '/') {'text/html; charset=utf-8'} elseif ($path -eq '/style.css') {'text/css; charset=utf-8'} else {'text/javascript; charset=utf-8'}
                     Send-Raw $stream 200 $type ([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot $static[$path]))); continue
+                }
+                if ($method -eq 'GET' -and $path -eq '/preview-frame.html') {
+                    # Preview is deliberately isolated from the app: this relaxed policy applies ONLY to
+                    # an iframe with sandbox=allow-scripts and WITHOUT allow-same-origin.
+                    $previewCsp = "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'unsafe-inline'; img-src data: blob:; font-src data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'"
+                    Send-Raw $stream 200 'text/html; charset=utf-8' ([System.IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'preview-frame.html'))) $previewCsp
+                    continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/health') {
                     $health=Get-TuzeHealth; $vision=Get-VisionModel
@@ -140,8 +106,43 @@ try {
                     Send-Json $stream 200 $health; continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/session') {
-                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Get-GitHubAuthToken); legacy_passphrase=(Read-TuzeSecret 'legacy-passphrase')} }
+                    try { Send-Json $stream 200 @{master=(Read-LegacyTuzeMaster); token=(Get-GitHubAuthToken)} }
                     catch { Send-Json $stream 503 @{error=$_.Exception.Message} }
+                    continue
+                }
+                if ($method -eq 'GET' -and $path -eq '/api/login/status') {
+                    $statusPath=Join-Path $env:LOCALAPPDATA 'TuzeStorage\github-login-status.json'
+                    $token=Get-GitHubAuthToken
+                    if ($token) { Send-Json $stream 200 @{authenticated=$true;waiting=$false;error=$null} }
+                    elseif (Test-Path -LiteralPath $statusPath) {
+                        try {
+                            $status=Get-Content -LiteralPath $statusPath -Encoding UTF8 -Raw | ConvertFrom-Json -ErrorAction Stop
+                            $expired=([DateTime]::UtcNow - [DateTime]::Parse([string]$status.updated_at)).TotalMinutes -gt 10
+                            Send-Json $stream 200 @{authenticated=$false;waiting=($status.status -eq 'waiting' -and -not $expired);error=$(if($expired){'GitHub кіру уақыты аяқталды. Қайта басыңыз.'} elseif($status.status -eq 'error') {[string]$status.message} else {$null})}
+                        } catch { Send-Json $stream 200 @{authenticated=$false;waiting=$false;error='GitHub статусы анықталмады.'} }
+                    } else { Send-Json $stream 200 @{authenticated=$false;waiting=$false;error=$null} }
+                    continue
+                }
+                $jobMatch = [regex]::Match($path,'^/api/(?:tuze|logo|chat)/result/([0-9a-f]{32})$')
+                if ($method -eq 'GET' -and $jobMatch.Success) {
+                    $jobId = $jobMatch.Groups[1].Value
+                    $outputPath = Join-Path $script:JobFolder ($jobId + '.result.json')
+                    $inputPath = Join-Path $script:JobFolder ($jobId + '.input.json')
+                    $progressPath = Join-Path $script:JobFolder ($jobId + '.progress.json')
+                    if ([System.IO.File]::Exists($outputPath)) {
+                        try { $finished = Get-Content -LiteralPath $outputPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                            Send-Json $stream 200 $finished }
+                        catch { Send-Json $stream 500 @{error='Түзету нәтижесін оқу мүмкін болмады.'} }
+                    } elseif ([System.IO.File]::Exists($inputPath)) {
+                        $age = [DateTime]::UtcNow - [System.IO.File]::GetCreationTimeUtc($inputPath)
+                        if ($age.TotalMinutes -gt 16) { Send-Json $stream 503 @{error='gpt-oss:20b жауап беруге тым ұзақ уақыт жұмсады. Жедел жадты және Ollama-ны тексеріңіз.'} }
+                        elseif ($path -like '/api/chat/result/*' -and [System.IO.File]::Exists($progressPath)) {
+                            try {
+                                $progress = Get-Content -LiteralPath $progressPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+                                Send-Json $stream 200 @{done=$false;stage=[string]$progress.stage;partial=[string]$progress.text}
+                            } catch { Send-Json $stream 200 @{done=$false;stage='loading'} }
+                        } else { Send-Json $stream 200 @{done=$false;stage='starting'} }
+                    } else { Send-Json $stream 404 @{error='Түзету тапсырмасы табылмады.'} }
                     continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/local') { Send-Json $stream 200 @{files=@(Get-ChatFiles)}; continue }
@@ -154,7 +155,7 @@ try {
                 }
                 $retireMatch=[regex]::Match($path,'^/api/retire/(chat_\d{3,}\.json)$')
                 $isWrite=($method -eq 'PUT' -and $localMatch.Success) -or
-                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/tuze','/api/legacy/clear')))
+                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/chat/start','/api/tuze','/api/tuze/start','/api/logo/start','/api/login')))
                 if (-not $isWrite) { Send-Json $stream 404 @{error='Мекенжай табылмады.'}; continue }
                 if (-not $headers.ContainsKey('Content-Type') -or $headers['Content-Type'] -notmatch '^application/json(?:\s*;|$)') {
                     Send-Json $stream 415 @{error='JSON сұрауы керек.'}; continue
@@ -178,17 +179,83 @@ try {
                     } elseif ($retireMatch.Success) {
                         Send-Json $stream 200 (Retire-ChatEnvelope $retireMatch.Groups[1].Value ([string]$payload.expected_version))
                     } elseif ($path -eq '/api/chat') {
+                        # Legacy synchronous route kept for local compatibility tests.
                         Send-Json $stream 200 (Invoke-ChatModel $payload)
-                    } elseif ($path -eq '/api/legacy/clear') {
-                        Send-Json $stream 200 (Remove-TuzeSecret 'legacy-passphrase')
+                    } elseif ($path -eq '/api/chat/start') {
+                        # Local model generation must not block the single-threaded local web server.
+                        if ($null -eq $payload.messages -or $payload.messages -isnot [array] -or
+                            $payload.messages.Count -lt 1 -or $payload.messages.Count -gt 60 -or
+                            $payload.messages[-1].role -cne 'user') { throw 'Чат хабарламалары жарамсыз.' }
+                        $jobId = [guid]::NewGuid().ToString('N')
+                        $inputPath = Join-Path $script:JobFolder ($jobId + '.input.json')
+                        $workerPath = Join-Path $PSScriptRoot 'chat-worker.ps1'
+                        $workJson = ConvertTo-Json -InputObject @{messages=@($payload.messages)} -Depth 16 -Compress
+                        [System.IO.File]::WriteAllText($inputPath,$workJson,[System.Text.UTF8Encoding]::new($false))
+                        try {
+                            $args = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $workerPath + '" -Job ' + $jobId + ' -OllamaUrl ' + $script:TuzeUrl
+                            Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                        } catch {
+                            Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                        Send-Json $stream 200 @{job_id=$jobId;started=$true}
+                    } elseif ($path -eq '/api/login') {
+                        if (-not (Find-TuzeGh)) { Send-Json $stream 503 @{error='GitHub CLI табылмады. Windows PowerShell-де «winget install --id GitHub.cli --source winget» орындап, қайта кіріңіз.'} }
+                        elseif (Get-GitHubAuthToken) { Send-Json $stream 200 @{started=$false;authenticated=$true} }
+                        else {
+                            $loginStatus=Join-Path $env:LOCALAPPDATA 'TuzeStorage\github-login-status.json'
+                            [System.IO.File]::WriteAllText($loginStatus,'{"status":"waiting","updated_at":"'+[DateTime]::UtcNow.ToString('o')+'"}',[System.Text.UTF8Encoding]::new($false))
+                            $launcher = Join-Path $PSScriptRoot 'github-login.ps1'
+                            $arg = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $launcher + '"'
+                            Start-Process -FilePath 'powershell.exe' -ArgumentList $arg -ErrorAction Stop | Out-Null
+                            Send-Json $stream 200 @{started=$true}
+                        }
+                    } elseif ($path -eq '/api/logo/start') {
+                        if ($payload.text -isnot [string] -or $payload.text.Length -lt 1 -or
+                            $payload.text.Length -gt 4000 -or $payload.stage -cnotin @('analyze','build') -or
+                            $null -eq $payload.answers -or $payload.answers -isnot [array] -or
+                            $payload.answers.Count -gt 3) { throw 'Logo&AI сұрауы жарамсыз.' }
+                        foreach ($answer in $payload.answers) {
+                            if ($answer -isnot [pscustomobject] -or $answer.question -isnot [string] -or
+                                $answer.answer -isnot [string] -or $answer.question.Length -gt 240 -or
+                                $answer.answer.Length -gt 500) { throw 'Logo&AI жауабы жарамсыз.' }
+                        }
+                        $jobId = [guid]::NewGuid().ToString('N')
+                        $inputPath = Join-Path $script:JobFolder ($jobId + '.input.json')
+                        $workerPath = Join-Path $PSScriptRoot 'logo-worker.ps1'
+                        $workJson = ConvertTo-Json -InputObject @{text=$payload.text;stage=$payload.stage;answers=@($payload.answers)} -Depth 8 -Compress
+                        [System.IO.File]::WriteAllText($inputPath,$workJson,[System.Text.UTF8Encoding]::new($false))
+                        try {
+                            $args = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $workerPath + '" -Job ' + $jobId + ' -OllamaUrl ' + $script:TuzeUrl
+                            Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                        } catch {
+                            Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                        Send-Json $stream 200 @{job_id=$jobId;started=$true}
+                    } elseif ($path -eq '/api/tuze/start') {
+                        if ($payload.text -isnot [string] -or $payload.text.Length -gt 4000 -or $payload.mode -cnotin @('correct','natural')) { throw 'Түзету сұрауы жарамсыз.' }
+                        $jobId = [guid]::NewGuid().ToString('N')
+                        $inputPath = Join-Path $script:JobFolder ($jobId + '.input.json')
+                        $workerPath = Join-Path $PSScriptRoot 'tuze-worker.ps1'
+                        $workJson = ConvertTo-Json -InputObject @{text=$payload.text;mode=$payload.mode} -Compress
+                        [System.IO.File]::WriteAllText($inputPath,$workJson,[System.Text.UTF8Encoding]::new($false))
+                        try {
+                            $args = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $workerPath + '" -Job ' + $jobId + ' -OllamaUrl ' + $script:TuzeUrl
+                            Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                        } catch {
+                            Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                        Send-Json $stream 200 @{job_id=$jobId;started=$true}
                     } else {
-                        if ($payload.text -isnot [string] -or $payload.text.Length -gt 1200 -or $payload.mode -cnotin @('correct','natural')) { throw 'Түзету сұрауы жарамсыз.' }
+                        if ($payload.text -isnot [string] -or $payload.text.Length -gt 4000 -or $payload.mode -cnotin @('correct','natural')) { throw 'Түзету сұрауы жарамсыз.' }
                         Send-Json $stream 200 (Invoke-TuzeCorrection $payload.text $payload.mode)
                     }
                 } catch {
                     $message=$_.Exception.Message
                     if ($message.StartsWith('CONFLICT:')) { Send-Json $stream 409 @{error=$message} }
-                    elseif ($path -in @('/api/chat','/api/tuze')) { Send-Json $stream 503 @{error=$message} }
+                    elseif ($path -in @('/api/chat','/api/tuze','/api/tuze/start','/api/logo/start')) { Send-Json $stream 503 @{error=$message} }
                     else { Send-Json $stream 422 @{error=$message} }
                 }
             } finally { $stream.Dispose() }

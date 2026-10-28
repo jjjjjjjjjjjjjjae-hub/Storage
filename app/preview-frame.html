@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="kk">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>TUZE preview</title><style>body{font:14px system-ui,sans-serif;margin:18px;color:#666}</style></head>
+<body><p>Нәтиже ашылуда…</p>
+<script>
+'use strict';
+window.addEventListener('message', event => {
+  // Only messages from the embedding page can provide preview code.
+  if (event.source !== window.parent || !/^https?:\/\/(127\.0\.0\.1|localhost):\d+$/.test(event.origin)) return;
+  if (event.data?.kind !== 'tuze-code-preview-v1' || typeof event.data.html !== 'string' || event.data.html.length > 1_000_000) return;
+  // This entire document is an opaque-origin, sandboxed iframe. Never use allow-same-origin.
+  document.open();
+  document.write(event.data.html);
+  document.close();
+},{once:true});
+</script>
+</body>
+</html>
