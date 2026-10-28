@@ -2,6 +2,7 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tuze.ps1')
 . (Join-Path $PSScriptRoot 'local.ps1')
+. (Join-Path $PSScriptRoot 'secrets.ps1')
 Initialize-Tuze $OllamaUrl
 $encoding = [System.Text.UTF8Encoding]::new($false, $true)
 
@@ -116,6 +117,13 @@ try {
                     $headers[$key]=$line.Substring($split+1).Trim()
                 }
                 if ($bad) { Send-Json $stream 400 @{error='HTTP тақырыбы жарамсыз.'}; continue }
+                $receivedHost = if ($headers.ContainsKey('Host')) { $headers['Host'] } else { '' }
+                $expectedHost = '127.0.0.1:' + [string]$Port
+                $localhostHost = 'localhost:' + [string]$Port
+                if (-not ([string]::Equals($receivedHost,$expectedHost,[System.StringComparison]::OrdinalIgnoreCase) -or
+                    [string]::Equals($receivedHost,$localhostHost,[System.StringComparison]::OrdinalIgnoreCase))) {
+                    Send-Json $stream 403 @{error='Жергілікті Host керек.'}; continue
+                }
                 if ($method -ne 'GET' -and $headers.ContainsKey('Origin') -and
                     $headers['Origin'] -cne $url -and $headers['Origin'] -cne ('http://localhost:'+$Port)) {
                     Send-Json $stream 403 @{error='Басқа сайттан сұрауға рұқсат жоқ.'}; continue
@@ -131,6 +139,11 @@ try {
                     $health.vision_ready=[bool]$vision; $health.vision_model=$vision
                     Send-Json $stream 200 $health; continue
                 }
+                if ($method -eq 'GET' -and $path -eq '/api/session') {
+                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Read-TuzeSecret 'github-token')} }
+                    catch { Send-Json $stream 503 @{error=$_.Exception.Message} }
+                    continue
+                }
                 if ($method -eq 'GET' -and $path -eq '/api/local') { Send-Json $stream 200 @{files=@(Get-ChatFiles)}; continue }
                 $localMatch=[regex]::Match($path,'^/api/local/(chat_\d{3,}\.json)$')
                 if ($method -eq 'GET' -and $localMatch.Success) {
@@ -141,7 +154,7 @@ try {
                 }
                 $retireMatch=[regex]::Match($path,'^/api/retire/(chat_\d{3,}\.json)$')
                 $isWrite=($method -eq 'PUT' -and $localMatch.Success) -or
-                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/tuze')))
+                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/tuze','/api/token','/api/recovery/import')))
                 if (-not $isWrite) { Send-Json $stream 404 @{error='Мекенжай табылмады.'}; continue }
                 if (-not $headers.ContainsKey('Content-Type') -or $headers['Content-Type'] -notmatch '^application/json(?:\s*;|$)') {
                     Send-Json $stream 415 @{error='JSON сұрауы керек.'}; continue
@@ -166,6 +179,12 @@ try {
                         Send-Json $stream 200 (Retire-ChatEnvelope $retireMatch.Groups[1].Value ([string]$payload.expected_version))
                     } elseif ($path -eq '/api/chat') {
                         Send-Json $stream 200 (Invoke-ChatModel $payload)
+                    } elseif ($path -eq '/api/token') {
+                        if ($payload.token -isnot [string]) { throw 'GitHub токені керек.' }
+                        Send-Json $stream 200 (Save-GitHubToken $payload.token)
+                    } elseif ($path -eq '/api/recovery/import') {
+                        if ($payload.master -isnot [string]) { throw 'Қалпына келтіру кілті керек.' }
+                        Send-Json $stream 200 (Import-TuzeMaster $payload.master)
                     } else {
                         if ($payload.text -isnot [string] -or $payload.text.Length -gt 1200 -or $payload.mode -cnotin @('correct','natural')) { throw 'Түзету сұрауы жарамсыз.' }
                         Send-Json $stream 200 (Invoke-TuzeCorrection $payload.text $payload.mode)

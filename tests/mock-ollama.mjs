@@ -14,6 +14,10 @@ const server = http.createServer(async (req, res) => {
     for await (const chunk of req) raw += chunk;
     const data = JSON.parse(raw);
     const last = data.messages.at(-1);
+    if (data.format) {
+      res.end(JSON.stringify({done:true, done_reason:'stop', message:{content:JSON.stringify({corrected_text:'Сәлем, әлем!',uncertain:false})}}));
+      return;
+    }
     const photo = Array.isArray(last.images) && last.images.length === 1;
     const accepted = photo ? data.model === 'qwen3-vl:4b-instruct' : data.model === 'qwen3:4b-instruct';
     res.statusCode = accepted ? 200 : 400;

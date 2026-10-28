@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\local.ps1','app\tuze.ps1')) {
+foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\local.ps1','app\tuze.ps1','app\secrets.ps1')) {
     $tokens = $null; $errors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root $name),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw ('PowerShell parse: ' + $name + ' ' + $errors[0].Message) }
@@ -27,11 +27,32 @@ try {
     if ($page.Content -notmatch 'Tuze') { throw 'HTML was not served.' }
     $script = Invoke-WebRequest -Uri ($base + '/app.mjs') -UseBasicParsing
     if ($script.Content -notmatch 'syncCurrent') { throw 'JavaScript was not served.' }
+    $session = Invoke-RestMethod -Uri ($base + '/api/session')
+    $again = Invoke-RestMethod -Uri ($base + '/api/session')
+    if ($session.master -ne $again.master -or [Convert]::FromBase64String($session.master).Length -ne 32) { throw 'Automatic key generation failed.' }
+    $secretFile = Join-Path $env:LOCALAPPDATA 'TuzeStorage\master.dpapi'
+    if (-not (Test-Path -LiteralPath $secretFile) -or
+        [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($secretFile)).Contains($session.master)) { throw 'Master key is not protected.' }
+    $token = 'github_pat_test_1234567890abcdef'
+    [void](Invoke-RestMethod -Uri ($base + '/api/token') -Method Post -ContentType 'application/json' -Body (@{token=$token} | ConvertTo-Json -Compress))
+    if ((Invoke-RestMethod -Uri ($base + '/api/session')).token -ne $token) { throw 'Protected GitHub token did not persist.' }
+    $socket = [System.Net.Sockets.TcpClient]::new('127.0.0.1',$port)
+    try {
+        $network = $socket.GetStream()
+        $request = [System.Text.Encoding]::ASCII.GetBytes("GET /api/session HTTP/1.1`r`nHost: attacker.example:$port`r`nConnection: close`r`n`r`n")
+        $network.Write($request,0,$request.Length)
+        $reader = [System.IO.StreamReader]::new($network)
+        $line = $reader.ReadLine()
+        if ($line -notmatch '^HTTP/1\.1 403 ') { throw 'DNS rebinding Host was accepted.' }
+    } finally { $socket.Dispose() }
     $health = Invoke-RestMethod -Uri ($base + '/api/health')
     if (-not $health.ready -or -not $health.vision_ready) { throw 'Text or vision model detection failed.' }
     $textRequest = @{messages=@(@{role='user';content='Сәлем'})} | ConvertTo-Json -Depth 8 -Compress
     $textReply = Invoke-RestMethod -Uri ($base + '/api/chat') -Method Post -ContentType 'application/json' -Body $textRequest
     if ($textReply.text -ne 'Мәтін көрінді' -or $textReply.model -ne 'qwen3:4b-instruct') { throw 'Text model routing failed.' }
+    $tuzeRequest = @{text='Сәлем әлем';mode='correct'} | ConvertTo-Json -Compress
+    $tuzeReply = Invoke-RestMethod -Uri ($base + '/api/tuze') -Method Post -ContentType 'application/json' -Body $tuzeRequest
+    if ($tuzeReply.corrected_text -ne 'Сәлем, әлем!' -or $tuzeReply.status -ne 'corrected') { throw 'Tuze correction failed.' }
     $photoRequest = @{messages=@(@{role='user';content='Бұл не?';image=@{mime='image/jpeg';data='AA==';width=1;height=1}})} | ConvertTo-Json -Depth 8 -Compress
     $photoReply = Invoke-RestMethod -Uri ($base + '/api/chat') -Method Post -ContentType 'application/json' -Body $photoRequest
     if ($photoReply.text -ne 'Фото көрінді' -or $photoReply.model -ne 'qwen3-vl:4b-instruct') { throw 'Vision model routing failed.' }
@@ -55,7 +76,10 @@ try {
     try { [void](Put 'chat_001.json' @{envelope=$first;expected_version=$first.version}); throw 'Stale write was accepted.' }
     catch [System.Net.WebException] { if ([int]$_.Exception.Response.StatusCode -ne 409) { throw } }
     if (@(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'TuzeStorage\chats') -Filter 'chat_001.json.bak.*').Count -lt 1) { throw 'Local backup missing.' }
-    Write-Host 'WINDOWS_PASS: PS5.1, page, text/photo model routing, separate chats, CAS, backup'
+    $recovery = [Convert]::ToBase64String([byte[]](1..32))
+    [void](Invoke-RestMethod -Uri ($base + '/api/recovery/import') -Method Post -ContentType 'application/json' -Body (@{master=$recovery} | ConvertTo-Json -Compress))
+    if ((Invoke-RestMethod -Uri ($base + '/api/session')).master -ne $recovery) { throw 'Recovery key import failed.' }
+    Write-Host 'WINDOWS_PASS: PS5.1, DPAPI, Host guard, recovery, Tuze, text/photo routing, separate chats, CAS, backup'
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }

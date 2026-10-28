@@ -1,4 +1,5 @@
 import { ChatStore, localClient, githubClient } from './store.mjs';
+import { encryptChat, decryptChat } from './crypto.mjs';
 
 const $ = id => document.getElementById(id);
 const local = localClient();
@@ -7,6 +8,11 @@ let active = null;
 let busy = false;
 let proposal = null;
 let pendingImage = null;
+let master = null;
+let tuzeTimer = null;
+let tuzeRevision = 0;
+let tuzeInFlight = false;
+let proposalOriginal = null;
 
 function message(text, error = false) {
   $('notice').textContent = text;
@@ -16,13 +22,22 @@ function message(text, error = false) {
 function syncStatus(text) { $('sync-status').textContent = text; }
 function setBusy(value) {
   busy = value;
-  for (const id of ['new-chat','sync','send','tuze','unlock']) $(id).disabled = value;
+  for (const id of ['new-chat','sync','send','save-token','export-key','restore-key','migrate']) $(id).disabled = value;
   $('draft').disabled = value;
   $('photo-input').disabled = value;
   $('remove-photo').disabled = value;
 }
 function assertUnlocked() {
-  if (!store) throw new Error('Алдымен кілтсөзді енгізіңіз.');
+  if (!store) throw new Error('Кілт ашылмады. Қалпына келтіру бөлімін тексеріңіз.');
+}
+
+async function api(path, body) {
+  const response = await fetch(path, body === undefined ? {cache:'no-store'} : {
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body), cache:'no-store',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+  return data;
 }
 
 async function renderList() {
@@ -65,7 +80,7 @@ function renderChat() {
     }
     list.append(entry);
   }
-  if (!active) list.textContent = 'Кілтсөзді енгізіп, чатты ашыңыз немесе жаңасын жасаңыз.';
+  if (!active) list.textContent = store ? 'Чатты таңдаңыз немесе жаңасын бастаңыз.' : 'Чаттар ашылуда…';
   list.scrollTop = list.scrollHeight;
 }
 
@@ -76,7 +91,7 @@ function drawDifference(original, corrected) {
   let left = original.length, right = corrected.length;
   while (left > prefix && right > prefix && original[left - 1] === corrected[right - 1]) { left--; right--; }
   for (const [label, text, end, color] of [
-    ['Бұрын', original, left, 'old'], ['Tuze ұсынған', corrected, right, 'new'],
+    ['Алдыңғы нұсқа', original, left, 'old'], ['Кейінгі нұсқа', corrected, right, 'new'],
   ]) {
     const row = document.createElement('div'); row.className = 'diff-row';
     const title = document.createElement('b'); title.textContent = label;
@@ -110,18 +125,135 @@ async function run(task) {
   finally { setBusy(false); }
 }
 
-$('unlock').addEventListener('click', () => run(async () => {
-  const passphrase = $('passphrase').value;
-  if (passphrase.length < 12) throw new Error('Кілтсөз кемінде 12 таңба болсын. Оны жоғалтпаңыз.');
+async function synchronize() {
+  assertUnlocked();
+  if (!store.remote) throw new Error('GitHub токенін бір рет енгізіңіз.');
+  const selectedId = active?.id;
+  syncStatus('GitHub синхрондалуда…');
+  await store.syncAll();
+  active = null;
+  const names = await store.list();
+  if (selectedId) for (const filename of names) {
+    const chat = await store.open(filename);
+    if (chat.id === selectedId) { active = chat; break; }
+  }
+  if (!active && names.length) active = await store.open(names[0]);
+  renderChat(); await renderList(); syncStatus('Барлық чат GitHub-та сақталды');
+}
+
+async function autoSync() {
+  if (busy || !store?.remote) return;
+  await run(async () => {
+    try { await synchronize(); }
+    catch (error) {
+      syncStatus('Ноутбукта сақталды · GitHub әзірге синхрондалмады');
+      if (error.message.includes('Кілтсөз қате')) showLegacy();
+      throw error;
+    }
+  });
+}
+
+function showLegacy() {
+  $('legacy-section').hidden = false;
+  $('legacy-section').closest('details').open = true;
+}
+
+async function boot() {
+  try {
+    const session = await api('/api/session');
+    if (typeof session.master !== 'string' || session.master.length < 40) throw new Error('Кілт жарамсыз.');
+    master = session.master;
+    const candidate = new ChatStore(local, master, session.token ? githubClient(session.token) : null);
+    const files = await candidate.list();
+    for (const filename of files) await candidate.open(filename); // Validate all before enabling writes.
+    store = candidate;
+    active = files.length ? await store.open(files[0]) : null;
+    $('lock-status').textContent = 'Шифрлау автоматты · Windows-та қорғалған';
+    syncStatus(store.remote ? 'GitHub қосылды · синхрондалуда…' : 'Ноутбукта сақталады · GitHub токенін бір рет қосыңыз');
+    renderChat(); await renderList();
+    if (store.remote) await autoSync();
+  } catch (error) {
+    $('lock-status').textContent = 'Кілтті қалпына келтіру керек';
+    showLegacy();
+    message(error.message || 'Чаттарды аша алмадым. Ештеңе өзгертілмеді.', true);
+  }
+}
+
+$('save-token').addEventListener('click', () => run(async () => {
+  assertUnlocked();
   const token = $('token').value.trim();
-  const candidate = new ChatStore(local, passphrase, token ? githubClient(token) : null);
-  const files = await candidate.list();
-  if (files.length) await candidate.open(files[0]); // Verify before replacing the active key.
-  store = candidate; $('passphrase').value = ''; $('token').value = '';
-  $('lock-status').textContent = token ? 'Ашылды · GitHub қосылды' : 'Ашылды · ноутбукта';
-  syncStatus(token ? 'Синхрондау батырмасын басыңыз' : 'GitHub үшін токенді енгізіп, қайта ашыңыз');
-  active = files.length ? await store.open(files[0]) : null;
+  if (!token) throw new Error('Storage репосына арналған GitHub токенін енгізіңіз.');
+  await api('/api/token', {token});
+  store.remote = githubClient(token);
+  $('token').value = '';
+  $('lock-status').textContent = 'Шифрлау автоматты · GitHub қосылды';
+  try { await synchronize(); }
+  catch (error) { syncStatus('Ноутбукта сақталды · GitHub синхрондау қатесі'); throw error; }
+}));
+
+$('export-key').addEventListener('click', () => run(async () => {
+  if (!master) throw new Error('Кілт әлі ашылмады.');
+  const url = URL.createObjectURL(new Blob([master + '\n'], {type:'text/plain'}));
+  const link = document.createElement('a'); link.href = url; link.download = 'Tuze-қалпына-келтіру-кілті.txt';
+  document.body.append(link); link.click(); link.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  message('Кілт жүктелді. Оны бөлек қауіпсіз жерде сақтаңыз.');
+}));
+
+$('restore-key').addEventListener('click', () => run(async () => {
+  const replacement = $('import-key').value.trim();
+  let bytes;
+  try { bytes = Uint8Array.from(atob(replacement), char => char.charCodeAt(0)); }
+  catch { throw new Error('Қалпына келтіру кілті жарамсыз.'); }
+  if (bytes.length !== 32) throw new Error('Қалпына келтіру кілті жарамсыз.');
+  const candidate = new ChatStore(local, replacement, store?.remote || null);
+  for (const filename of await candidate.list()) await candidate.open(filename);
+  await api('/api/recovery/import', {master:replacement});
+  const session = await api('/api/session');
+  candidate.remote = session.token ? githubClient(session.token) : null;
+  $('import-key').value = ''; master = replacement; store = candidate;
+  $('legacy-section').hidden = true;
+  const names = await store.list(); active = names.length ? await store.open(names[0]) : null;
+  $('lock-status').textContent = 'Кілт қалпына келтірілді · автоматты шифрлау';
   renderChat(); await renderList();
+  if (store.remote) { try { await synchronize(); } catch (error) { syncStatus('GitHub синхрондау қатесі'); throw error; } }
+}));
+
+$('migrate').addEventListener('click', () => run(async () => {
+  if (!master) throw new Error('Windows кілті ашылмады. Алдымен қалпына келтіру кілтін енгізіңіз.');
+  const previous = $('legacy-passphrase').value;
+  if (previous.length < 12) throw new Error('Бұрынғы кілтсөз кемінде 12 таңба болуы керек.');
+  const session = await api('/api/session');
+  const remote = session.token ? githubClient(session.token) : null;
+  const names = await local.list();
+  const pending = [];
+  for (const filename of names) {
+    const envelope = await local.get(filename);
+    try { await new ChatStore(local, master).open(filename); }
+    catch {
+      const chat = await new ChatStore(local, previous).open(filename);
+      pending.push({filename, version:envelope.version, envelope:await encryptChat(chat, master)});
+    }
+  }
+  const pendingRemote = [];
+  if (remote) for (const filename of await remote.list()) {
+    const current = await remote.get(filename);
+    if (!current) continue;
+    try { await decryptChat(current.envelope, master, filename); }
+    catch {
+      const chat = await decryptChat(current.envelope, previous, filename);
+      pendingRemote.push({filename, sha:current.sha, envelope:await encryptChat(chat, master)});
+    }
+  }
+  for (const item of pending) await local.put(item.filename, item.envelope, item.version);
+  for (const item of pendingRemote) await remote.put(item.filename, item.envelope, item.sha);
+  $('legacy-passphrase').value = '';
+  store = new ChatStore(local, master, remote);
+  active = names.length ? await store.open(names[0]) : null;
+  $('legacy-section').hidden = true;
+  $('lock-status').textContent = 'Ескі чаттар көшірілді · автоматты шифрлау';
+  renderChat(); await renderList();
+  if (store.remote) { try { await synchronize(); } catch (error) { syncStatus('GitHub-тағы ескі чаттарды көшіру керек'); showLegacy(); throw error; } }
 }));
 
 $('new-chat').addEventListener('click', () => run(async () => {
@@ -133,20 +265,14 @@ $('new-chat').addEventListener('click', () => run(async () => {
 }));
 
 $('sync').addEventListener('click', () => run(async () => {
-  assertUnlocked();
-  if (!store.remote) throw new Error('GitHub токенін енгізіп, «Ашу» батырмасын басыңыз.');
-  const selectedId = active?.id;
-  await store.syncAll();
-  active = null;
-  if (selectedId) for (const filename of await store.list()) {
-    const chat = await store.open(filename);
-    if (chat.id === selectedId) { active = chat; break; }
-  }
-  renderChat(); await renderList(); syncStatus('Барлық чат синхрондалды');
+  try { await synchronize(); }
+  catch (error) { syncStatus('Ноутбукта сақталды · GitHub синхрондау қатесі'); throw error; }
 }));
 
 $('send').addEventListener('click', () => run(async () => {
   assertUnlocked();
+  cancelTuze();
+  $('tuze-status').textContent = 'Tuze өзі тексереді';
   const image = pendingImage;
   const text = $('draft').value.trim() || (image ? 'Бұл фотода не бар?' : '');
   if (!text) throw new Error('Хабарлама жазыңыз немесе фото тіркеңіз.');
@@ -223,28 +349,64 @@ $('draft').addEventListener('keydown', event => {
   if (event.ctrlKey && event.key === 'Enter') { event.preventDefault(); $('send').click(); }
 });
 
-$('tuze').addEventListener('click', () => run(async () => {
+function cancelTuze() {
+  tuzeRevision++;
+  clearTimeout(tuzeTimer);
+  proposal = null;
+  proposalOriginal = null;
+  $('review').hidden = true;
+}
+
+function scheduleTuze() {
+  cancelTuze();
   const text = $('draft').value;
-  if (!text.trim()) throw new Error('Алдымен түзететін мәтінді жазыңыз.');
-  if (text.length > 1200) throw new Error('Tuze 1200 таңбаға дейін түзетеді.');
-  const response = await fetch('/api/tuze', { method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({text, mode: $('tuze-mode').value}) });
-  const data = await response.json();
-  if (!response.ok) throw new Error(data.error || 'Tuze жауабы алынбады.');
-  proposal = data.suggested_text || data.corrected_text;
-  drawDifference(text, proposal);
-  $('review-note').textContent = (data.warnings || []).join(' ') ||
-    (proposal === text ? 'Өзгеріс жоқ.' : 'Өзгерісті қарап, қабылдасаңыз ғана қолданамыз.');
-  $('review').hidden = false;
-  $('apply').disabled = proposal === text;
-}));
+  if (!text.trim()) { $('tuze-status').textContent = 'Tuze өзі тексереді'; return; }
+  if (text.length > 1200) { $('tuze-status').textContent = 'Tuze 1200 таңбаға дейін тексереді'; return; }
+  if (text.trim().length < 3) return;
+  const revision = tuzeRevision;
+  const mode = $('tuze-mode').value;
+  $('tuze-status').textContent = tuzeInFlight ? 'Tuze алдыңғы тексеруді аяқтауда…' : 'Tuze тексереді…';
+  if (tuzeInFlight) return;
+  tuzeTimer = setTimeout(() => { void checkTuze(text, mode, revision); }, 1400);
+}
+
+async function checkTuze(text, mode, revision) {
+  if (busy || !store || tuzeInFlight || revision !== tuzeRevision) return;
+  tuzeInFlight = true;
+  try {
+    const response = await fetch('/api/tuze', { method:'POST',
+      headers:{'Content-Type':'application/json'}, body:JSON.stringify({text,mode}) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Tuze жауабы алынбады.');
+    if (revision !== tuzeRevision || $('draft').value !== text || $('tuze-mode').value !== mode) return;
+    proposal = data.suggested_text || data.corrected_text;
+    proposalOriginal = text;
+    drawDifference(text, proposal);
+    $('review-note').textContent = (data.warnings || []).join(' ') ||
+      (proposal === text ? 'Өзгеріс жоқ.' : 'Өзгерісті тексеріп, қаласаңыз қолданыңыз.');
+    $('review').hidden = false;
+    $('apply').disabled = proposal === text;
+    $('tuze-status').textContent = 'Tuze ұсынысы дайын';
+  } catch (error) {
+    if (revision === tuzeRevision) {
+      $('tuze-status').textContent = 'Tuze: ' + (error.message || 'қате');
+    }
+  } finally {
+    tuzeInFlight = false;
+    if (revision !== tuzeRevision && $('draft').value.trim() && !busy) scheduleTuze();
+  }
+}
+
+$('draft').addEventListener('input', scheduleTuze);
+$('tuze-mode').addEventListener('change', scheduleTuze);
 
 $('apply').addEventListener('click', () => {
-  if (proposal !== null) $('draft').value = proposal;
-  $('review').hidden = true; proposal = null; $('draft').focus();
+  if (proposal !== null && $('draft').value === proposalOriginal) $('draft').value = proposal;
+  cancelTuze(); $('tuze-status').textContent = 'Tuze өзгерісі қолданылды'; $('draft').focus();
 });
-$('dismiss').addEventListener('click', () => { $('review').hidden = true; proposal = null; });
+$('dismiss').addEventListener('click', () => {
+  cancelTuze(); $('tuze-status').textContent = 'Tuze өзгерісі қалдырылды';
+});
 
 async function health() {
   try { const res = await fetch('/api/health'); const data = await res.json();
@@ -254,4 +416,6 @@ async function health() {
       'Фото жіберіледі; талдау үшін qwen3-vl:4b-instruct орнатыңыз'; }
   catch { $('model-status').textContent = 'Ollama байланысы жоқ'; }
 }
-renderChat(); renderList().catch(error => message(error.message, true)); health();
+renderChat(); boot(); health();
+window.addEventListener('online', () => { void autoSync(); });
+setInterval(() => { void autoSync(); }, 120_000);

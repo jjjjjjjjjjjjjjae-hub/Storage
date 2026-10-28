@@ -79,10 +79,17 @@ export function githubClient(token, request = fetch) {
   const headers = { Authorization: `Bearer ${token.trim()}`,
     Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
   async function call(url, options = {}) {
-    const res = await request(url, { ...options, cache: 'no-store',
-      headers: { ...headers, ...(options.headers || {}) } });
-    if (res.status === 404) return null;
-    return responseJson(res);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20_000);
+    try {
+      const res = await request(url, { ...options, cache: 'no-store', signal:controller.signal,
+        headers: { ...headers, ...(options.headers || {}) } });
+      if (res.status === 404) return null;
+      return responseJson(res);
+    } catch (error) {
+      if (error.name === 'AbortError') throw new Error('GitHub жауап бермеді. Чат ноутбукта сақталды.');
+      throw error;
+    } finally { clearTimeout(timer); }
   }
   return {
     async list() {
