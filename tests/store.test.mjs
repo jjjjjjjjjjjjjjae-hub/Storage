@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { webcrypto } from 'node:crypto';
 import { encryptChat, decryptChat, newChat, nextFilename } from '../app/crypto.mjs';
-import { ChatStore, ConflictError, mergeChats } from '../app/store.mjs';
+import { ChatStore, ConflictError, mergeChats, githubClient } from '../app/store.mjs';
 
 globalThis.crypto ??= webcrypto;
 const password = 'ұзын-құпия-сөз-2026';
@@ -112,4 +112,28 @@ test('network outage does not prevent a new local chat', async () => {
   const chat = await store.create();
   assert.equal(chat.filename, nextFilename([]));
   assert.deepEqual(await store.list(), ['chat_001.json']);
+});
+
+test('GitHub Contents API uses encrypted base64 and SHA for updates', async () => {
+  const chat = newChat('chat_001.json');
+  chat.messages.push({id: crypto.randomUUID(), role: 'user', content: 'Құпия мәтін', created_at: chat.created_at});
+  const envelope = await encryptChat(chat, password);
+  const calls = [];
+  const request = async (url, options) => {
+    calls.push({url, options});
+    if (options.method === 'PUT') return {ok:true, status:200, async json() {return {content:{sha:'next-sha'}}}};
+    if (url.endsWith('/chat_001.json')) return {ok:true, status:200, async json() {
+      return {encoding:'base64', content:Buffer.from(JSON.stringify(envelope)).toString('base64'), sha:'old-sha'};
+    }};
+    return {ok:true, status:200, async json() {return [{type:'file',name:'chat_001.json'},{type:'file',name:'.gitkeep'}]}};
+  };
+  const client = githubClient('test-token', request);
+  assert.deepEqual(await client.list(), ['chat_001.json']);
+  assert.deepEqual((await client.get('chat_001.json')).envelope, envelope);
+  assert.equal(await client.put('chat_001.json', envelope, 'old-sha'), 'next-sha');
+  const sent = JSON.parse(calls[2].options.body);
+  assert.equal(sent.sha, 'old-sha');
+  assert.deepEqual(JSON.parse(Buffer.from(sent.content, 'base64').toString('utf8')), envelope);
+  assert.doesNotMatch(calls[2].options.body, /Құпия мәтін/);
+  assert.equal(calls[2].options.headers.Authorization, 'Bearer test-token');
 });
