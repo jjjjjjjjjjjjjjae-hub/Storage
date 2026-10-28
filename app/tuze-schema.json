@@ -1,0 +1,9 @@
+{
+  "type": "object",
+  "properties": {
+    "corrected_text": {"type": "string", "minLength": 1, "maxLength": 3600},
+    "uncertain": {"type": "boolean"}
+  },
+  "required": ["corrected_text", "uncertain"],
+  "additionalProperties": false
+}

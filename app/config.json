@@ -1,0 +1,7 @@
+{
+  "model": "qwen3:4b-instruct",
+  "ollama_url": "http://127.0.0.1:11434",
+  "timeout_seconds": 300,
+  "num_ctx": 4096,
+  "num_predict": 1024
+}
