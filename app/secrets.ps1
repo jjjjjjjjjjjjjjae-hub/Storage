@@ -1,4 +1,5 @@
 ﻿# Secrets are protected for the current Windows user. Never commit these files.
+Add-Type -AssemblyName System.Security
 $script:SecretFolder = Join-Path $env:LOCALAPPDATA 'TuzeStorage'
 [void][System.IO.Directory]::CreateDirectory($script:SecretFolder)
 $script:SecretEntropy = [System.Text.Encoding]::UTF8.GetBytes('TuzeStorage-DPAPI-v1')
