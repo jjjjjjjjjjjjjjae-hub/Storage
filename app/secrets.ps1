@@ -81,3 +81,21 @@ function Remove-TuzeSecret([string]$Name) {
     if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }
     return @{ removed = $true }
 }
+
+# gh performs a one-time browser login and manages its own credential refresh.
+# Keep the manually entered PAT as a fallback for machines without GitHub CLI.
+function Get-GitHubAuthToken([string]$GhCommand = 'gh') {
+    $gh = Get-Command $GhCommand -CommandType Application -ErrorAction SilentlyContinue
+    if ($gh) {
+        try {
+            $lines = @(& $gh.Source auth token --hostname github.com 2>$null)
+            if ($LASTEXITCODE -eq 0 -and $lines.Count -eq 1) {
+                $token = ([string]$lines[0]).Trim()
+                if ($token.Length -ge 20 -and $token.Length -le 512 -and $token -notmatch '\s') {
+                    return $token
+                }
+            }
+        } catch { }
+    }
+    return Read-TuzeSecret 'github-token'
+}

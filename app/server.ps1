@@ -140,7 +140,7 @@ try {
                     Send-Json $stream 200 $health; continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/session') {
-                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Read-TuzeSecret 'github-token'); legacy_passphrase=(Read-TuzeSecret 'legacy-passphrase')} }
+                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Get-GitHubAuthToken); legacy_passphrase=(Read-TuzeSecret 'legacy-passphrase')} }
                     catch { Send-Json $stream 503 @{error=$_.Exception.Message} }
                     continue
                 }
