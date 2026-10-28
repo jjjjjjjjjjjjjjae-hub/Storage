@@ -6,7 +6,7 @@ $script:SecretEntropy = [System.Text.Encoding]::UTF8.GetBytes('TuzeStorage-DPAPI
 $script:SecretScope = [System.Security.Cryptography.DataProtectionScope]::CurrentUser
 
 function Read-TuzeSecret([string]$Name) {
-    if ($Name -cnotin @('master','github-token')) { throw 'Secret name invalid.' }
+    if ($Name -cnotin @('master','github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
     $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
     if (-not [System.IO.File]::Exists($path)) { return $null }
     try {
@@ -17,7 +17,7 @@ function Read-TuzeSecret([string]$Name) {
 }
 
 function Write-TuzeSecret([string]$Name,[string]$Value) {
-    if ($Name -cnotin @('master','github-token')) { throw 'Secret name invalid.' }
+    if ($Name -cnotin @('master','github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
     $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
     $plain = [System.Text.Encoding]::UTF8.GetBytes($Value)
     $protected = [System.Security.Cryptography.ProtectedData]::Protect($plain,$script:SecretEntropy,$script:SecretScope)
@@ -65,4 +65,19 @@ function Save-GitHubToken([string]$Token) {
     }
     Write-TuzeSecret 'github-token' $Token
     return @{ saved = $true }
+}
+
+function Save-LegacyPassphrase([string]$Passphrase) {
+    if ($Passphrase.Length -lt 12 -or $Passphrase.Length -gt 512) {
+        throw 'Ескі кілтсөз 12–512 таңба болуы керек.'
+    }
+    Write-TuzeSecret 'legacy-passphrase' $Passphrase
+    return @{ saved = $true }
+}
+
+function Remove-TuzeSecret([string]$Name) {
+    if ($Name -cnotin @('github-token','legacy-passphrase')) { throw 'Secret name invalid.' }
+    $path = Join-Path $script:SecretFolder ($Name + '.dpapi')
+    if ([System.IO.File]::Exists($path)) { [System.IO.File]::Delete($path) }
+    return @{ removed = $true }
 }

@@ -22,13 +22,13 @@ function message(text, error = false) {
 function syncStatus(text) { $('sync-status').textContent = text; }
 function setBusy(value) {
   busy = value;
-  for (const id of ['new-chat','sync','send','save-token','export-key','restore-key','migrate']) $(id).disabled = value;
+  for (const id of ['new-chat','send']) $(id).disabled = value;
   $('draft').disabled = value;
   $('photo-input').disabled = value;
   $('remove-photo').disabled = value;
 }
 function assertUnlocked() {
-  if (!store) throw new Error('Кілт ашылмады. Қалпына келтіру бөлімін тексеріңіз.');
+  if (!store) throw new Error('Чат ашылмады. Storage-Settings.cmd файлын пайдаланыңыз.');
 }
 
 async function api(path, body) {
@@ -80,7 +80,8 @@ function renderChat() {
     }
     list.append(entry);
   }
-  if (!active) list.textContent = store ? 'Чатты таңдаңыз немесе жаңасын бастаңыз.' : 'Чаттар ашылуда…';
+  if (!active) list.textContent = store ? 'Чатты таңдаңыз немесе жаңасын бастаңыз.' :
+    ($('lock-status').textContent.includes('дайындалуда') ? 'Чаттар ашылуда…' : 'Storage-Settings.cmd файлын ашыңыз.');
   list.scrollTop = list.scrollHeight;
 }
 
@@ -125,9 +126,12 @@ async function run(task) {
   finally { setBusy(false); }
 }
 
+let currentToken = null;
+let sessionCheck = false;
+
 async function synchronize() {
   assertUnlocked();
-  if (!store.remote) throw new Error('GitHub токенін бір рет енгізіңіз.');
+  if (!store.remote) throw new Error('GitHub байланысы жоқ. Storage-Settings.cmd файлын ашыңыз.');
   const selectedId = active?.id;
   syncStatus('GitHub синхрондалуда…');
   await store.syncAll();
@@ -147,114 +151,96 @@ async function autoSync() {
     try { await synchronize(); }
     catch (error) {
       syncStatus('Ноутбукта сақталды · GitHub әзірге синхрондалмады');
-      if (error.message.includes('Кілтсөз қате')) showLegacy();
       throw error;
     }
   });
 }
 
-function showLegacy() {
-  $('legacy-section').hidden = false;
-  $('legacy-section').closest('details').open = true;
-}
-
-async function boot() {
-  try {
-    const session = await api('/api/session');
-    if (typeof session.master !== 'string' || session.master.length < 40) throw new Error('Кілт жарамсыз.');
-    master = session.master;
-    const candidate = new ChatStore(local, master, session.token ? githubClient(session.token) : null);
-    const files = await candidate.list();
-    for (const filename of files) await candidate.open(filename); // Validate all before enabling writes.
-    store = candidate;
-    active = files.length ? await store.open(files[0]) : null;
-    $('lock-status').textContent = 'Шифрлау автоматты · Windows-та қорғалған';
-    syncStatus(store.remote ? 'GitHub қосылды · синхрондалуда…' : 'Ноутбукта сақталады · GitHub токенін бір рет қосыңыз');
-    renderChat(); await renderList();
-    if (store.remote) await autoSync();
-  } catch (error) {
-    $('lock-status').textContent = 'Кілтті қалпына келтіру керек';
-    showLegacy();
-    message(error.message || 'Чаттарды аша алмадым. Ештеңе өзгертілмеді.', true);
-  }
-}
-
-$('save-token').addEventListener('click', () => run(async () => {
-  assertUnlocked();
-  const token = $('token').value.trim();
-  if (!token) throw new Error('Storage репосына арналған GitHub токенін енгізіңіз.');
-  await api('/api/token', {token});
-  store.remote = githubClient(token);
-  $('token').value = '';
-  $('lock-status').textContent = 'Шифрлау автоматты · GitHub қосылды';
-  try { await synchronize(); }
-  catch (error) { syncStatus('Ноутбукта сақталды · GitHub синхрондау қатесі'); throw error; }
-}));
-
-$('export-key').addEventListener('click', () => run(async () => {
-  if (!master) throw new Error('Кілт әлі ашылмады.');
-  const url = URL.createObjectURL(new Blob([master + '\n'], {type:'text/plain'}));
-  const link = document.createElement('a'); link.href = url; link.download = 'Tuze-қалпына-келтіру-кілті.txt';
-  document.body.append(link); link.click(); link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  message('Кілт жүктелді. Оны бөлек қауіпсіз жерде сақтаңыз.');
-}));
-
-$('restore-key').addEventListener('click', () => run(async () => {
-  const replacement = $('import-key').value.trim();
-  let bytes;
-  try { bytes = Uint8Array.from(atob(replacement), char => char.charCodeAt(0)); }
-  catch { throw new Error('Қалпына келтіру кілті жарамсыз.'); }
-  if (bytes.length !== 32) throw new Error('Қалпына келтіру кілті жарамсыз.');
-  const candidate = new ChatStore(local, replacement, store?.remote || null);
-  for (const filename of await candidate.list()) await candidate.open(filename);
-  await api('/api/recovery/import', {master:replacement});
-  const session = await api('/api/session');
-  candidate.remote = session.token ? githubClient(session.token) : null;
-  $('import-key').value = ''; master = replacement; store = candidate;
-  $('legacy-section').hidden = true;
-  const names = await store.list(); active = names.length ? await store.open(names[0]) : null;
-  $('lock-status').textContent = 'Кілт қалпына келтірілді · автоматты шифрлау';
-  renderChat(); await renderList();
-  if (store.remote) { try { await synchronize(); } catch (error) { syncStatus('GitHub синхрондау қатесі'); throw error; } }
-}));
-
-$('migrate').addEventListener('click', () => run(async () => {
-  if (!master) throw new Error('Windows кілті ашылмады. Алдымен қалпына келтіру кілтін енгізіңіз.');
-  const previous = $('legacy-passphrase').value;
-  if (previous.length < 12) throw new Error('Бұрынғы кілтсөз кемінде 12 таңба болуы керек.');
-  const session = await api('/api/session');
-  const remote = session.token ? githubClient(session.token) : null;
-  const names = await local.list();
+async function migrateLegacy(previous, token) {
   const pending = [];
-  for (const filename of names) {
+  for (const filename of await local.list()) {
     const envelope = await local.get(filename);
-    try { await new ChatStore(local, master).open(filename); }
+    try { await decryptChat(envelope, master, filename); }
     catch {
-      const chat = await new ChatStore(local, previous).open(filename);
+      const chat = await decryptChat(envelope, previous, filename);
       pending.push({filename, version:envelope.version, envelope:await encryptChat(chat, master)});
     }
   }
-  const pendingRemote = [];
-  if (remote) for (const filename of await remote.list()) {
-    const current = await remote.get(filename);
-    if (!current) continue;
-    try { await decryptChat(current.envelope, master, filename); }
-    catch {
-      const chat = await decryptChat(current.envelope, previous, filename);
-      pendingRemote.push({filename, sha:current.sha, envelope:await encryptChat(chat, master)});
-    }
-  }
   for (const item of pending) await local.put(item.filename, item.envelope, item.version);
-  for (const item of pendingRemote) await remote.put(item.filename, item.envelope, item.sha);
-  $('legacy-passphrase').value = '';
-  store = new ChatStore(local, master, remote);
-  active = names.length ? await store.open(names[0]) : null;
-  $('legacy-section').hidden = true;
-  $('lock-status').textContent = 'Ескі чаттар көшірілді · автоматты шифрлау';
+
+  let remoteError = null;
+  if (token) {
+    try {
+      const remote = githubClient(token);
+      const pendingRemote = [];
+      for (const filename of await remote.list()) {
+        const current = await remote.get(filename);
+        if (!current) continue;
+        try { await decryptChat(current.envelope, master, filename); }
+        catch {
+          const chat = await decryptChat(current.envelope, previous, filename);
+          pendingRemote.push({filename, sha:current.sha, envelope:await encryptChat(chat, master)});
+        }
+      }
+      for (const item of pendingRemote) await remote.put(item.filename, item.envelope, item.sha);
+    } catch (error) { remoteError = error; }
+  }
+  if (!remoteError) await api('/api/legacy/clear', {done:true});
+  return remoteError;
+}
+
+async function activateSession(session) {
+  if (typeof session.master !== 'string' || session.master.length < 40) throw new Error('Windows кілті жарамсыз.');
+  const selectedId = active?.id;
+  if (master !== session.master) { store = null; active = null; }
+  master = session.master;
+  let migrationError = null;
+  if (session.legacy_passphrase) {
+    setBusy(true);
+    try { migrationError = await migrateLegacy(session.legacy_passphrase, session.token); }
+    finally { setBusy(false); }
+  }
+  const candidate = new ChatStore(local, master, session.token ? githubClient(session.token) : null);
+  const files = await candidate.list();
+  for (const filename of files) await candidate.open(filename);
+  store = candidate; currentToken = session.token || null;
+  active = null;
+  if (selectedId) for (const filename of files) {
+    const chat = await store.open(filename);
+    if (chat.id === selectedId) { active = chat; break; }
+  }
+  if (!active && files.length) active = await store.open(files[0]);
+  $('lock-status').textContent = 'Шифрлау автоматты · Windows-та қорғалған';
+  syncStatus(store.remote ? 'GitHub қосылды · синхрондалуда…' :
+    'Ноутбукта сақталады · GitHub баптауы: Storage-Settings.cmd');
   renderChat(); await renderList();
-  if (store.remote) { try { await synchronize(); } catch (error) { syncStatus('GitHub-тағы ескі чаттарды көшіру керек'); showLegacy(); throw error; } }
-}));
+  if (migrationError) {
+    syncStatus('Жергілікті чаттар сақталды · GitHub көшіру күтілуде');
+    message(migrationError.message, true);
+  } else if (store.remote) await autoSync();
+}
+
+async function refreshSession() {
+  if (busy || sessionCheck) return;
+  sessionCheck = true;
+  try {
+    const session = await api('/api/session');
+    if (!store || master !== session.master || session.legacy_passphrase) {
+      await activateSession(session);
+    } else if ((session.token || null) !== currentToken) {
+      currentToken = session.token || null;
+      store.remote = currentToken ? githubClient(currentToken) : null;
+      syncStatus(currentToken ? 'GitHub қосылды · синхрондалуда…' : 'Ноутбукта сақталады · GitHub ажыратылды');
+      if (store.remote) await autoSync();
+    }
+  } catch (error) {
+    if (!store) {
+      $('lock-status').textContent = 'Қалпына келтіру: Storage-Settings.cmd';
+      renderChat();
+    }
+    message(error.message || 'Чаттарды аша алмадым. Файлдар өзгертілмеді.', true);
+  } finally { sessionCheck = false; }
+}
 
 $('new-chat').addEventListener('click', () => run(async () => {
   assertUnlocked();
@@ -262,11 +248,6 @@ $('new-chat').addEventListener('click', () => run(async () => {
   renderChat(); await renderList();
   await syncCurrent();
   $('draft').focus();
-}));
-
-$('sync').addEventListener('click', () => run(async () => {
-  try { await synchronize(); }
-  catch (error) { syncStatus('Ноутбукта сақталды · GitHub синхрондау қатесі'); throw error; }
 }));
 
 $('send').addEventListener('click', () => run(async () => {
@@ -416,6 +397,7 @@ async function health() {
       'Фото жіберіледі; талдау үшін qwen3-vl:4b-instruct орнатыңыз'; }
   catch { $('model-status').textContent = 'Ollama байланысы жоқ'; }
 }
-renderChat(); boot(); health();
-window.addEventListener('online', () => { void autoSync(); });
+renderChat(); void refreshSession(); health();
+window.addEventListener('online', () => { void refreshSession(); void autoSync(); });
+setInterval(() => { void refreshSession(); }, 30_000);
 setInterval(() => { void autoSync(); }, 120_000);
