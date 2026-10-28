@@ -140,7 +140,7 @@ try {
                     Send-Json $stream 200 $health; continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/session') {
-                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Read-TuzeSecret 'github-token')} }
+                    try { Send-Json $stream 200 @{master=(Get-TuzeMaster); token=(Read-TuzeSecret 'github-token'); legacy_passphrase=(Read-TuzeSecret 'legacy-passphrase')} }
                     catch { Send-Json $stream 503 @{error=$_.Exception.Message} }
                     continue
                 }
@@ -154,7 +154,7 @@ try {
                 }
                 $retireMatch=[regex]::Match($path,'^/api/retire/(chat_\d{3,}\.json)$')
                 $isWrite=($method -eq 'PUT' -and $localMatch.Success) -or
-                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/tuze','/api/token','/api/recovery/import')))
+                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/tuze','/api/legacy/clear')))
                 if (-not $isWrite) { Send-Json $stream 404 @{error='Мекенжай табылмады.'}; continue }
                 if (-not $headers.ContainsKey('Content-Type') -or $headers['Content-Type'] -notmatch '^application/json(?:\s*;|$)') {
                     Send-Json $stream 415 @{error='JSON сұрауы керек.'}; continue
@@ -179,12 +179,8 @@ try {
                         Send-Json $stream 200 (Retire-ChatEnvelope $retireMatch.Groups[1].Value ([string]$payload.expected_version))
                     } elseif ($path -eq '/api/chat') {
                         Send-Json $stream 200 (Invoke-ChatModel $payload)
-                    } elseif ($path -eq '/api/token') {
-                        if ($payload.token -isnot [string]) { throw 'GitHub токені керек.' }
-                        Send-Json $stream 200 (Save-GitHubToken $payload.token)
-                    } elseif ($path -eq '/api/recovery/import') {
-                        if ($payload.master -isnot [string]) { throw 'Қалпына келтіру кілті керек.' }
-                        Send-Json $stream 200 (Import-TuzeMaster $payload.master)
+                    } elseif ($path -eq '/api/legacy/clear') {
+                        Send-Json $stream 200 (Remove-TuzeSecret 'legacy-passphrase')
                     } else {
                         if ($payload.text -isnot [string] -or $payload.text.Length -gt 1200 -or $payload.mode -cnotin @('correct','natural')) { throw 'Түзету сұрауы жарамсыз.' }
                         Send-Json $stream 200 (Invoke-TuzeCorrection $payload.text $payload.mode)

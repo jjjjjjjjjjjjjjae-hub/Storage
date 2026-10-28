@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\local.ps1','app\tuze.ps1','app\secrets.ps1')) {
+foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\local.ps1','app\tuze.ps1','app\secrets.ps1','Storage-Settings.ps1')) {
     $tokens = $null; $errors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root $name),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw ('PowerShell parse: ' + $name + ' ' + $errors[0].Message) }
@@ -25,6 +25,8 @@ try {
     }
     if (-not $ready) { throw ('Server did not respond: ' + (Get-Content $stderr -Raw -ErrorAction SilentlyContinue) + (Get-Content $stdout -Raw -ErrorAction SilentlyContinue)) }
     if ($page.Content -notmatch 'Tuze') { throw 'HTML was not served.' }
+    if ($page.Content -match 'id=\"(?:token|import-key|legacy-passphrase|restore-key|save-token)\"') { throw 'Secret input leaked into chat UI.' }
+    if (-not (Test-Path (Join-Path $root 'Storage-Settings.cmd'))) { throw 'External settings launcher missing.' }
     $script = Invoke-WebRequest -Uri ($base + '/app.mjs') -UseBasicParsing
     if ($script.Content -notmatch 'syncCurrent') { throw 'JavaScript was not served.' }
     $session = Invoke-RestMethod -Uri ($base + '/api/session')
@@ -33,9 +35,16 @@ try {
     $secretFile = Join-Path $env:LOCALAPPDATA 'TuzeStorage\master.dpapi'
     if (-not (Test-Path -LiteralPath $secretFile) -or
         [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($secretFile)).Contains($session.master)) { throw 'Master key is not protected.' }
+    . (Join-Path $root 'app\secrets.ps1')
     $token = 'github_pat_test_1234567890abcdef'
-    [void](Invoke-RestMethod -Uri ($base + '/api/token') -Method Post -ContentType 'application/json' -Body (@{token=$token} | ConvertTo-Json -Compress))
+    [void](Save-GitHubToken $token)
     if ((Invoke-RestMethod -Uri ($base + '/api/session')).token -ne $token) { throw 'Protected GitHub token did not persist.' }
+    [void](Save-LegacyPassphrase 'old-test-passphrase-123')
+    if ((Invoke-RestMethod -Uri ($base + '/api/session')).legacy_passphrase -ne 'old-test-passphrase-123') { throw 'Legacy migration secret missing.' }
+    [void](Invoke-RestMethod -Uri ($base + '/api/legacy/clear') -Method Post -ContentType 'application/json' -Body '{"done":true}')
+    if ((Invoke-RestMethod -Uri ($base + '/api/session')).legacy_passphrase) { throw 'Legacy secret was not removed.' }
+    try { [void](Invoke-RestMethod -Uri ($base + '/api/token') -Method Post -ContentType 'application/json' -Body (@{token=$token} | ConvertTo-Json -Compress)); throw 'Browser token endpoint is still available.' }
+    catch [System.Net.WebException] { if ([int]$_.Exception.Response.StatusCode -ne 404) { throw } }
     $socket = [System.Net.Sockets.TcpClient]::new('127.0.0.1',$port)
     try {
         $network = $socket.GetStream()
@@ -76,10 +85,15 @@ try {
     try { [void](Put 'chat_001.json' @{envelope=$first;expected_version=$first.version}); throw 'Stale write was accepted.' }
     catch [System.Net.WebException] { if ([int]$_.Exception.Response.StatusCode -ne 409) { throw } }
     if (@(Get-ChildItem (Join-Path $env:LOCALAPPDATA 'TuzeStorage\chats') -Filter 'chat_001.json.bak.*').Count -lt 1) { throw 'Local backup missing.' }
-    $recovery = [Convert]::ToBase64String([byte[]](1..32))
-    [void](Invoke-RestMethod -Uri ($base + '/api/recovery/import') -Method Post -ContentType 'application/json' -Body (@{master=$recovery} | ConvertTo-Json -Compress))
-    if ((Invoke-RestMethod -Uri ($base + '/api/session')).master -ne $recovery) { throw 'Recovery key import failed.' }
-    Write-Host 'WINDOWS_PASS: PS5.1, DPAPI, Host guard, recovery, Tuze, text/photo routing, separate chats, CAS, backup'
+    $settings = Join-Path $root 'Storage-Settings.ps1'
+    $recoveryPath = Join-Path $env:LOCALAPPDATA 'Tuze-Recovery-Key.txt'
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $settings -Action Export -Path $recoveryPath | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (Get-Content -LiteralPath $recoveryPath -Raw).Trim() -ne $session.master) { throw 'External recovery export failed.' }
+    $different = [Convert]::ToBase64String([byte[]](1..32))
+    [void](Import-TuzeMaster $different)
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $settings -Action Import -Path $recoveryPath | Out-Null
+    if ($LASTEXITCODE -ne 0 -or (Invoke-RestMethod -Uri ($base + '/api/session')).master -ne $session.master) { throw 'External recovery import failed.' }
+    Write-Host 'WINDOWS_PASS: PS5.1, external settings, DPAPI, Host guard, recovery, Tuze, text/photo routing, separate chats, CAS, backup'
 } finally {
     if (-not $process.HasExited) { Stop-Process -Id $process.Id -Force }
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
