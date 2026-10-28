@@ -14,12 +14,17 @@
       <div class="aside-head"><h2>Чаттар</h2><button id="new-chat" type="button">+ Жаңа чат</button></div>
       <div id="chat-list" aria-label="Чаттар тізімі"></div>
       <section class="secure">
-        <h3>Құлып пен синхрондау</h3>
-        <label>Шифрлау кілтсөзі <input id="passphrase" type="password" autocomplete="new-password" placeholder="Кемінде 12 таңба"></label>
-        <label>GitHub токені <span>міндетті емес</span><input id="token" type="password" autocomplete="off" placeholder="Тек осы сессияда"></label>
-        <div class="row"><button id="unlock" type="button">Ашу</button><button id="sync" type="button">GitHub синхрондау</button></div>
-        <p id="lock-status">Құлыптаулы</p><p id="sync-status">Чаттар алдымен ноутбукқа шифрланып сақталады.</p>
-        <p class="privacy">Репозиторий public: файл атаулары көрінеді, мәтін шифрланған. Кілтсөзді жоғалтсаңыз, чаттар ашылмайды. Токен мен кілтсөз репозиторийге жазылмайды.</p>
+        <h3>Автоматты сақтау</h3>
+        <p id="lock-status">Кілт дайындалуда…</p><p id="sync-status">Чаттар ноутбукқа шифрланып сақталады.</p>
+        <details><summary>GitHub және қалпына келтіру</summary>
+          <label>GitHub токені <span>бір рет енгізіледі</span><input id="token" type="password" autocomplete="off" placeholder="Storage репосының токені"></label>
+          <div class="row"><button id="save-token" type="button">Токенді сақтау</button><button id="sync" type="button">Қазір синхрондау</button></div>
+          <div class="row recovery"><button id="export-key" type="button">Қалпына келтіру кілтін сақтау</button></div>
+          <label>Басқа құрылғыдағы кілтті енгізу <input id="import-key" type="password" autocomplete="off" placeholder="Бұрын сақталған қалпына келтіру кілті"></label>
+          <button id="restore-key" type="button">Кілтті қалпына келтіру</button>
+          <div id="legacy-section" hidden><label>Ескі нұсқадағы кілтсөз <input id="legacy-passphrase" type="password" autocomplete="off"></label><button id="migrate" type="button">Ескі чаттарды көшіру</button></div>
+          <p class="privacy">Репозиторий public: файл атаулары көрінеді, мәтін шифрланған. Қалпына келтіру кілтін бөлек қауіпсіз жерде сақтаңыз. GitHub токені мен кілт бұл репозиторийге жіберілмейді.</p>
+        </details>
       </section>
     </aside>
     <section class="conversation">
@@ -35,7 +40,7 @@
         <label for="draft">Хабарлама</label>
         <textarea id="draft" rows="4" maxlength="4000" placeholder="Хабарлама жаз немесе фото тірке…"></textarea>
         <div class="photo-tools"><label class="photo-button" for="photo-input">📷 Фото қосу</label><input id="photo-input" type="file" accept="image/*"><div id="photo-preview" hidden></div><button id="remove-photo" type="button" hidden>Фотосыз жіберу ✕</button></div>
-        <div class="actions"><div class="row"><select id="tuze-mode" aria-label="Tuze режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select><button id="tuze" type="button">Tuze · өзгерісті көру</button></div><button id="send" type="button" class="primary">Жіберу ↗</button></div>
+        <div class="actions"><div class="row"><select id="tuze-mode" aria-label="Tuze режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select><small id="tuze-status">Tuze өзі тексереді</small></div><button id="send" type="button" class="primary">Жіберу ↗</button></div>
         <small id="photo-status">Фотоны талдау үшін vision модель тексерілуде…</small><br>
         <small>Ctrl+Enter — жіберу. Жіберген хабарлама модельге бармай тұрып сақталады.</small>
       </div>
