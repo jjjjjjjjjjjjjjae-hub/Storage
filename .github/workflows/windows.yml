@@ -1,0 +1,14 @@
+name: Windows chat storage
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Browser crypto and sync tests
+        run: node --test tests/*.test.mjs
+      - name: Windows PowerShell 5.1 server and local storage
+        shell: cmd
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests\windows.ps1

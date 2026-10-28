@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="kk">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Tuze · шифрланған чаттар</title>
+  <link rel="stylesheet" href="/style.css">
+  <script type="module" src="/app.mjs"></script>
+</head>
+<body>
+  <header><div class="brand">TUZE<span>.</span> <small>чаттар</small></div><div id="model-status">Ollama тексерілуде…</div></header>
+  <main>
+    <aside>
+      <div class="aside-head"><h2>Чаттар</h2><button id="new-chat" type="button">+ Жаңа чат</button></div>
+      <div id="chat-list" aria-label="Чаттар тізімі"></div>
+      <section class="secure">
+        <h3>Құлып пен синхрондау</h3>
+        <label>Шифрлау кілтсөзі <input id="passphrase" type="password" autocomplete="new-password" placeholder="Кемінде 12 таңба"></label>
+        <label>GitHub токені <span>міндетті емес</span><input id="token" type="password" autocomplete="off" placeholder="Тек осы сессияда"></label>
+        <div class="row"><button id="unlock" type="button">Ашу</button><button id="sync" type="button">GitHub синхрондау</button></div>
+        <p id="lock-status">Құлыптаулы</p><p id="sync-status">Чаттар алдымен ноутбукқа шифрланып сақталады.</p>
+        <p class="privacy">Репозиторий public: файл атаулары көрінеді, мәтін шифрланған. Кілтсөзді жоғалтсаңыз, чаттар ашылмайды. Токен мен кілтсөз репозиторийге жазылмайды.</p>
+      </section>
+    </aside>
+    <section class="conversation">
+      <div class="chat-head"><h1 id="chat-title">Чатты таңдаңыз</h1><span id="chat-file"></span></div>
+      <div id="messages" class="messages" aria-live="polite"></div>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section id="review" class="review" hidden>
+        <div class="review-head"><h2>Tuze өзгерісі</h2><span>Қолданбас бұрын тексеріңіз</span></div>
+        <div id="difference"></div><p id="review-note"></p>
+        <div class="row"><button id="apply" type="button">Өзгерісті қолдану</button><button id="dismiss" type="button">Қалдыру</button></div>
+      </section>
+      <div class="composer">
+        <label for="draft">Хабарлама</label>
+        <textarea id="draft" rows="4" maxlength="4000" placeholder="Қазақша жазыңыз…"></textarea>
+        <div class="actions"><div class="row"><select id="tuze-mode" aria-label="Tuze режимі"><option value="correct">Қатені түзету</option><option value="natural">Табиғи жазу</option></select><button id="tuze" type="button">Tuze · өзгерісті көру</button></div><button id="send" type="button" class="primary">Жіберу ↗</button></div>
+        <small>Ctrl+Enter — жіберу. Жіберген хабарлама модельге бармай тұрып сақталады.</small>
+      </div>
+    </section>
+  </main>
+</body>
+</html>
