@@ -1,6 +1,6 @@
 ﻿$ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
-foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\chat-model.ps1','app\chat-worker.ps1','app\local.ps1','app\tuze.ps1','app\secrets.ps1','app\github-login.ps1','app\tuze-worker.ps1','app\logo-worker.ps1','app\logo-ai.ps1')) {
+foreach ($name in @('Start-Storage.ps1','app\server.ps1','app\chat-model.ps1','app\chat-worker.ps1','app\local.ps1','app\tuze.ps1','app\secrets.ps1','app\github-login.ps1','app\tuze-worker.ps1','app\logo-worker.ps1','app\logo-ai.ps1','app\image-model.ps1','app\image-worker.ps1','Setup-Images.ps1')) {
     $tokens = $null; $errors = $null
     [void][System.Management.Automation.Language.Parser]::ParseFile((Join-Path $root $name),[ref]$tokens,[ref]$errors)
     if ($errors.Count) { throw ('PowerShell parse: ' + $name + ': ' + $errors[0].Message) }
@@ -12,6 +12,27 @@ $base = 'http://127.0.0.1:28765'
 $server = Join-Path $root 'app\server.ps1'
 $stdout = Join-Path $env:LOCALAPPDATA 'server.out'
 $stderr = Join-Path $env:LOCALAPPDATA 'server.err'
+$oldImageCli=$env:TUZE_IMAGE_CLI; $oldImageModel=$env:TUZE_IMAGE_MODEL; $oldImagePng=$env:TUZE_IMAGE_TEST_PNG
+$fakeCli=Join-Path $env:LOCALAPPDATA 'sd-cli.exe'
+$env:TUZE_IMAGE_MODEL=Join-Path $env:LOCALAPPDATA 'test-model.safetensors'
+$env:TUZE_IMAGE_TEST_PNG=Join-Path $env:LOCALAPPDATA 'image.png'
+$env:TUZE_IMAGE_CLI=$fakeCli
+[System.IO.File]::WriteAllText($env:TUZE_IMAGE_MODEL,'mock',[System.Text.Encoding]::ASCII)
+[System.IO.File]::WriteAllBytes($env:TUZE_IMAGE_TEST_PNG,[Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lNsAAAAASUVORK5CYII='))
+$fakeSource=@'
+using System;
+using System.IO;
+public class MockImageCli {
+  public static int Main(string[] args) {
+    for (int i=0;i<args.Length-1;i++) {
+      if (args[i]=="--prompt-file") Console.Error.WriteLine("Prompt: "+File.ReadAllText(args[i+1]));
+      if (args[i]=="--output") { File.Copy(Environment.GetEnvironmentVariable("TUZE_IMAGE_TEST_PNG"),args[i+1],true); return 0; }
+    }
+    return 2;
+  }
+}
+'@
+Add-Type -TypeDefinition $fakeSource -OutputAssembly $fakeCli -OutputType ConsoleApplication
 $mock = Start-Process -FilePath node.exe -ArgumentList @(('"' + (Join-Path $root 'tests\mock-ollama.mjs') + '"'),'11439') -PassThru -WindowStyle Hidden
 $proc = Start-Process -FilePath powershell.exe -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-File',('"' + $server + '"'),'-Port','28765','-OllamaUrl','http://127.0.0.1:11439','-NoBrowser') -PassThru -WindowStyle Hidden -RedirectStandardOutput $stdout -RedirectStandardError $stderr
 try {
@@ -29,7 +50,7 @@ try {
     if (Test-Path -LiteralPath (Join-Path $env:LOCALAPPDATA 'TuzeStorage\master.dpapi')) { throw 'Secret creation was not removed.' }
     if (Test-Path -LiteralPath (Join-Path $root 'Storage-Settings.cmd')) { throw 'Old menu still present.' }
     $health = Invoke-RestMethod -Uri ($base + '/api/health')
-    if (-not $health.ready -or $health.model -ne 'gpt-oss:20b' -or -not $health.vision_ready) { throw 'gpt-oss:20b model health failed.' }
+    if (-not $health.ready -or $health.model -ne 'gpt-oss:20b' -or -not $health.vision_ready -or -not $health.image_ready) { throw 'gpt-oss:20b model health failed.' }
     $chatBody = @{messages=@(@{role='user';content='Hi'})} | ConvertTo-Json -Depth 8 -Compress
     $response = Invoke-RestMethod -Uri ($base + '/api/chat') -Method Post -ContentType 'application/json' -Body $chatBody
     if ($response.text -ne 'Мәтін көрінді') { throw 'Ollama chat request failed.' }
@@ -81,7 +102,21 @@ try {
     }
     if ($null -eq $buildOutput -or $buildOutput.error -or $buildOutput.result.questions.Count -ne 0 -or
         $buildOutput.result.prompt_en -notmatch 'Devices') { throw ('Logo&AI build failed: ' + (ConvertTo-Json $buildOutput -Depth 6 -Compress)) }
-    $now = '2026-10-28T00:00:00.000Z'
+    $imageBody = @{text='Қызыл алма, шынайы фото'} | ConvertTo-Json -Compress
+    $imageJob = Invoke-RestMethod -Uri ($base + '/api/image/start') -Method Post -ContentType 'application/json' -Body $imageBody
+    if ([string]$imageJob.job_id -cnotmatch '^[0-9a-f]{32}$') { throw 'Image job creation failed.' }
+    $imageResult=$null
+    for ($i=0; $i -lt 60; $i++) {
+        Start-Sleep -Milliseconds 200
+        $candidate=Invoke-RestMethod -Uri ($base + '/api/image/result/' + $imageJob.job_id) -TimeoutSec 3
+        if ($candidate.done) { $imageResult=$candidate; break }
+    }
+    if ($null -eq $imageResult -or $imageResult.error -or
+        [Convert]::FromBase64String([string]$imageResult.result.image_base64).Length -lt 16 -or
+        $imageResult.result.prompt_en -notmatch 'A red apple') {
+        throw ('Local image generation failed: ' + (ConvertTo-Json $imageResult -Depth 5 -Compress))
+    }
+    $now = '2026-10-28T00:00:00.000Z' 
     function New-Envelope([string]$Filename) {
         return @{schema_version=3;id=[guid]::NewGuid().ToString();version=[guid]::NewGuid().ToString();filename=$Filename;
             title='Test';created_at=$now;updated_at=$now;messages=@()}
@@ -112,9 +147,10 @@ try {
         $reader = [System.IO.StreamReader]::new($stream)
         if ($reader.ReadLine() -notmatch '^HTTP/1\.1 403 ') { throw 'Host header injection was accepted.' }
     } finally { $socket.Dispose() }
-    Write-Host 'WINDOWS_PASS: account login, local JSON v3, model, async TUZE, Logo&AI clarification + build, Host check'
+    Write-Host 'WINDOWS_PASS: local image generation, account login, JSON v3, model, async TUZE, Logo&AI, Host check'
 } finally {
     if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force }
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:TUZE_IMAGE_CLI=$oldImageCli; $env:TUZE_IMAGE_MODEL=$oldImageModel; $env:TUZE_IMAGE_TEST_PNG=$oldImagePng
 }

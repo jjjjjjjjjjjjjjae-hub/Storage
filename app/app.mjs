@@ -8,6 +8,8 @@ let active = null;
 let busy = false;
 let proposal = null;
 let pendingImage = null;
+let imageMode = false;
+let imageReady = false;
 let legacyMaster = null;
 let currentToken = null;
 let sessionCheck = false;
@@ -32,9 +34,9 @@ function message(text, error = false) {
 function syncStatus(text) { $('sync-status').textContent = text; }
 function setBusy(value) {
   busy = value;
-  for (const id of ['new-chat','new-chat-top','send']) $(id).disabled = value;
+  for (const id of ['new-chat','new-chat-top','send','image-mode']) $(id).disabled = value;
   $('draft').disabled = value;
-  $('photo-input').disabled = value;
+  $('photo-input').disabled = value || imageMode;
   $('remove-photo').disabled = value;
 }
 function assertUnlocked() {
@@ -126,7 +128,8 @@ function renderChat() {
     if (item.image) {
       const photo = document.createElement('img');
       photo.src = `data:image/jpeg;base64,${item.image.data}`;
-      photo.alt = 'Тіркелген фото'; photo.className = 'chat-photo'; entry.append(photo);
+      photo.alt = item.role === 'assistant' ? 'TUZE жасаған сурет' : 'Тіркелген фото';
+      photo.className = 'chat-photo'; entry.append(photo);
     }
     const actions = document.createElement('div'); actions.className = 'msg-actions';
     const copy = document.createElement('button'); copy.type = 'button'; copy.className = 'copy-message';
@@ -136,6 +139,14 @@ function renderChat() {
       catch { message('Мәтінді көшіру мүмкін болмады.', true); }
     });
     actions.append(copy);
+    if (item.role === 'assistant' && item.image) {
+      const download = document.createElement('a');
+      download.className = 'copy-message';
+      download.textContent = '↓ Фото';
+      download.href = `data:image/jpeg;base64,${item.image.data}`;
+      download.download = `tuze-${item.id}.jpg`;
+      actions.append(download);
+    }
     const fix=document.createElement('button');
     fix.type='button';fix.className='fix-message';fix.textContent='✦ Түзету';
     fix.title='Осы хабарламаның қатесін TUZE арқылы түзету';
@@ -375,6 +386,7 @@ async function sendChat(optimizedPrompt = null) { return run(async () => {
   if (text.length > 4000) throw new Error('Хабарлама 4000 таңбадан аспасын.');
   if (!active) active = await store.create();
   active = await store.append(active.filename, 'user', text, image); // Local commit before model call.
+  const chatFile = active.filename;
   const sentId = active.messages.at(-1).id;
   $('draft').value = ''; fitDraft(); $('review').hidden = true; proposal = null;
   pendingImage = null; $('photo-input').value = ''; showPendingPhoto();
@@ -415,12 +427,55 @@ async function sendChat(optimizedPrompt = null) { return run(async () => {
     break;
   }
   if (!result?.text) throw new Error('gpt-oss:20b жауап бермеді. Чаттағы сұрақ сақталды.');
-  active = await store.append(active.filename, 'assistant', result.text);
-  renderChat(); await renderList();
+  const completed = await store.append(chatFile, 'assistant', result.text);
+  if (active?.filename === chatFile) { active = completed; renderChat(); }
+  await renderList();
   // Sync is optional and must not delay seeing the model's completed answer.
-  queueMicrotask(() => { if (store?.remote) void syncCurrent(); });
+  queueMicrotask(() => {
+    if (!store?.remote) return;
+    void (active?.filename === chatFile ? syncCurrent() :
+      store.syncOne(chatFile).catch(()=>syncStatus('Ноутбукта сақталды · GitHub синхрондау күтіп тұр')));
+  });
 }); }
-$('send').addEventListener('click', () => { if (logoOriginal !== null) closeLogo(); void sendChat(); });
+async function generateImage() { return run(async () => {
+  assertUnlocked();
+  if (!imageReady) throw new Error('Сурет моделі жоқ. Storage/Setup-Images.cmd файлын бір рет іске қосыңыз.');
+  if (pendingImage) throw new Error('Сурет жасау режимінде тіркелген фотоны алып тастаңыз.');
+  const prompt = $('draft').value.trim();
+  if (!prompt || prompt.length > 800) throw new Error('Суретті 1–800 таңбамен сипаттаңыз.');
+  cancelTuze();
+  if (!active) active = await store.create();
+  active = await store.append(active.filename, 'user', 'Сурет жаса: ' + prompt);
+  const chatFile = active.filename;
+  $('draft').value = ''; fitDraft();
+  renderChat(); await renderList();
+  showThinking();
+  $('thinking-status').textContent = 'Жергілікті сурет моделі жұмыс істеп жатыр…';
+  const job = await api('/api/image/start', {text:prompt});
+  if (!/^[a-f0-9]{32}$/.test(job.job_id || '')) throw new Error('Сурет тапсырмасы басталмады.');
+  let result = null;
+  for (let attempt=0; attempt<1800; attempt++) {
+    await new Promise(resolve=>setTimeout(resolve,1000));
+    const state = await api(`/api/image/result/${job.job_id}`);
+    if (!state.done) continue;
+    if (state.error) throw new Error(state.error);
+    result = state.result;
+    break;
+  }
+  if (!result?.image_base64 || result.image_base64.length > 5_600_000)
+    throw new Error('Сурет моделі нәтиже бермеді. Сипаттама чатта сақталды.');
+  const bytes = Uint8Array.from(atob(result.image_base64), char=>char.charCodeAt(0));
+  const image = await preparePhoto(new Blob([bytes],{type:'image/png'}));
+  const completed = await store.append(chatFile,'assistant','Жасалған сурет: '+prompt,image);
+  if (active?.filename === chatFile) { active = completed; renderChat(); }
+  await renderList();
+  queueMicrotask(() => {
+    if (!store?.remote) return;
+    void (active?.filename === chatFile ? syncCurrent() :
+      store.syncOne(chatFile).catch(()=>syncStatus('Ноутбукта сақталды · GitHub синхрондау күтіп тұр')));
+  });
+}); }
+$('send').addEventListener('click', () => { if (logoOriginal !== null) closeLogo(); void (imageMode ? generateImage() : sendChat()); });
 
 function showPendingPhoto() {
   $('photo-preview').replaceChildren();
@@ -609,7 +664,7 @@ function cancelTuze() {
 }
 
 function scheduleTuze() {
-  if (logoOriginal !== null) return;
+  if (logoOriginal !== null || imageMode) return;
   cancelTuze();
   const text = $('draft').value;
   if (!correctEnabled) return;
@@ -680,11 +735,29 @@ $('dismiss').addEventListener('click', () => {
 async function health() {
   try { const res = await fetch('/api/health'); const data = await res.json();
     $('model-status').textContent = data.ready ? `${data.model} · орнатылған` : data.message;
+    imageReady = Boolean(data.image_ready);
     $('photo-status').textContent = data.vision_ready ?
       `${data.vision_model} · фотоны талдайды` :
       'Фото жіберіледі; талдау үшін qwen3-vl:4b-instruct орнатыңыз'; }
-  catch { $('model-status').textContent = 'Ollama байланысы жоқ'; }
+  catch { imageReady=false; $('model-status').textContent = 'Ollama байланысы жоқ'; }
 }
+$('image-mode').addEventListener('click', async () => {
+  await health();
+  if (!imageMode && !imageReady) {
+    message('Сурет моделі жоқ. ZIP ішіндегі Storage/Setup-Images.cmd файлын бір рет іске қосыңыз.',true);
+    return;
+  }
+  if (!imageMode && pendingImage) { message('Алдымен тіркелген фотоны алып тастаңыз.',true); return; }
+  imageMode = !imageMode;
+  $('image-mode').setAttribute('aria-pressed',String(imageMode));
+  $('draft').placeholder = imageMode ? 'Суретті сипатта: Алматыдағы түнгі көше, шынайы фото…' : 'TUZE-ге хабарлама жаз…';
+  $('tuze-status').textContent = imageMode ? 'Жергілікті SD-Turbo · 512×512 · фото жасау' : 'TUZE қателерді тексереді';
+  $('photo-input').disabled=imageMode;
+  for (const id of ['logo-ai','correct-now','correct-toggle']) $(id).disabled=imageMode;
+  cancelTuze();
+  if (!imageMode) scheduleTuze();
+  $('draft').focus();
+});
 function setCollapsed(value) {
   $('sidebar').classList.toggle('closed', value);
   $('expand').hidden = !value;

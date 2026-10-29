@@ -20,7 +20,7 @@ test('20B chat is a background job and keeps the preview code path', () => {
   const worker=file('app/chat-worker.ps1');
   assert.match(server, /'\/api\/chat\/start'/);
   assert.match(server, /'chat-worker.ps1'/);
-  assert.match(server, /chat\)\/result/);
+  assert.match(server, /chat\|image\)\/result/);
   assert.match(ui, /api\/chat\/start/);
   assert.match(ui, /api\/chat\/result/);
   assert.match(ui, /renderCodeWorkspace/);

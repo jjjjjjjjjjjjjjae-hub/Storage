@@ -9,6 +9,13 @@ const server = http.createServer(async (req, res) => {
     ]}));
     return;
   }
+  if (req.method === 'POST' && req.url === '/api/generate') {
+    let raw='';
+    for await (const chunk of req) raw+=chunk;
+    const data=JSON.parse(raw);
+    res.end(JSON.stringify({done:true,response:'',unloaded:data.model==='gpt-oss:20b' && data.keep_alive===0}));
+    return;
+  }
   if (req.method === 'POST' && req.url === '/api/chat') {
     let raw = '';
     for await (const chunk of req) raw += chunk;
@@ -24,7 +31,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (data.format) {
       let output;
-      if (data.format.properties?.prompt_en) {
+      if (data.format.properties?.prompt_en && !data.format.properties?.interpreted_kk) {
+        output={prompt_en:'A red apple on a wooden table, realistic photograph'};
+      } else if (data.format.properties?.prompt_en) {
         const request = JSON.parse(last.content);
         output = request.stage === 'build'
           ? {interpreted_kk:'Құрылғылар бөлімінің анимациясын тегістеу',questions:[],prompt_en:'Improve the animation in the Devices section. Respond in Kazakh.',uncertain:false}

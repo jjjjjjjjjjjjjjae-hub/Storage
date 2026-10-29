@@ -18,7 +18,7 @@ function assertChat(c, filename) {
       throw new Error('Чаттың хабарламасы жарамсыз.');
     if (m.edited_at !== undefined && (typeof m.edited_at !== 'string' || !Number.isFinite(Date.parse(m.edited_at)))) throw new Error('Түзету уақыты қате.');
     if (m.original_content !== undefined && (typeof m.original_content !== 'string' || m.original_content.length > 4000)) throw new Error('Бастапқы мәтін жарамсыз.');
-    if (m.image && (m.role !== 'user' || m.image.mime !== 'image/jpeg' ||
+    if (m.image && (m.image.mime !== 'image/jpeg' ||
        typeof m.image.data !== 'string' || m.image.data.length > 200_000 ||
        !/^[A-Za-z\d+/]+={0,2}$/.test(m.image.data))) throw new Error('Фото жарамсыз.');
   }
@@ -93,12 +93,13 @@ export function githubClient(token,request=fetch) {
   if(typeof token!=='string' || token.length < 12) throw new Error('GitHub аккаунтына кіріңіз.');
   let repo=null;
   async function call(path,options={}) {
+    const {timeoutMs=25000,...requestOptions}=options;
     const controller=new AbortController();
-    const timer=setTimeout(()=>controller.abort(),25000);
+    const timer=setTimeout(()=>controller.abort(),timeoutMs);
     try {
-      const res=await request(ROOT+path,{...options,cache:'no-store',signal:controller.signal,
+      const res=await request(ROOT+path,{...requestOptions,cache:'no-store',signal:controller.signal,
         headers:{Authorization:`Bearer ${token.trim()}`,Accept:'application/vnd.github+json',
-          'X-GitHub-Api-Version':'2022-11-28',...(options.headers||{})}});
+          'X-GitHub-Api-Version':'2022-11-28',...(requestOptions.headers||{})}});
       if(res.status===404) return null;
       return responseJson(res);
     } catch(error) {
@@ -134,8 +135,11 @@ export function githubClient(token,request=fetch) {
     async get(filename) {
       await ensurePrivate(); const data=await call(filePath(filename));
       if(!data)return null;
-      if(data.encoding!=='base64'||typeof data.content!=='string') throw new Error('GitHub файлын оқу мүмкін емес.');
-      const file=JSON.parse(fromB64(data.content));
+      // Contents API omits file content above 1 MB; fetch the same SHA as a Git blob.
+      const source=data.encoding==='none' && /^[a-f0-9]{40}$/.test(data.sha||'')
+        ? await call(`${repo}/git/blobs/${data.sha}`,{timeoutMs:120000}) : data;
+      if(source?.encoding!=='base64'||typeof source.content!=='string') throw new Error('GitHub файлын оқу мүмкін емес.');
+      const file=JSON.parse(fromB64(source.content));
       assertChat(file,filename);
       if(file.schema_version!==3) throw new Error('Private қоймада ескі чат табылды. Оны автоматты ауыстырмадым.');
       return {envelope:file,sha:data.sha};
@@ -146,7 +150,7 @@ export function githubClient(token,request=fetch) {
       await ensurePrivate(); // Re-check visibility on EACH write; public repos never receive plaintext
       const body={message:`TUZE chat ${filename}`,content:toB64(JSON.stringify(file)),branch:'main'};
       if(sha)body.sha=sha;
-      const data=await call(filePath(filename),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+      const data=await call(filePath(filename),{method:'PUT',timeoutMs:120000,headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       if(!data?.content?.sha)throw new Error('GitHub сақтауды растамады.');
       return data.content.sha;
     }

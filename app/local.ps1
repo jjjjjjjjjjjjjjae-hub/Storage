@@ -46,7 +46,7 @@ function Assert-Envelope($Envelope, [string]$Filename) {
             $m.content -isnot [string] -or
             $m.content.Length -gt $(if ($m.role -ceq 'assistant') { 40000 } else { 4000 }) -or
             $m.created_at -isnot [string]) { throw 'Хабарлама жарамсыз.' }
-        if ($null -ne $m.image -and ($m.role -cne 'user' -or $m.image.mime -cne 'image/jpeg' -or
+        if ($null -ne $m.image -and ($m.image.mime -cne 'image/jpeg' -or
             $m.image.data -isnot [string] -or $m.image.data.Length -gt 200000 -or
             $m.image.data -cnotmatch '^[A-Za-z0-9+/]+={0,2}$')) { throw 'Фото жарамсыз.' }
     }
@@ -63,7 +63,7 @@ function Save-ChatEnvelope([string]$Filename, $Envelope, [string]$ExpectedVersio
     }
     $json = ConvertTo-Json -InputObject $Envelope -Depth 12 -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-    if ($bytes.Length -gt 2097152) { throw 'Чат файлы тым үлкен.' }
+    if ($bytes.Length -gt 8388608) { throw 'Чат файлы тым үлкен.' }
     $temp = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
         $stream = [System.IO.FileStream]::new($temp, [System.IO.FileMode]::CreateNew,

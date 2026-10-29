@@ -29,6 +29,7 @@ function Send-Json($Stream, [int]$Status, $Data) {
 }
 
 . (Join-Path $PSScriptRoot 'chat-model.ps1')
+. (Join-Path $PSScriptRoot 'image-model.ps1')
 
 $listener = $null
 for ($candidate=$Port; $candidate -lt ($Port+20); $candidate++) {
@@ -103,6 +104,7 @@ try {
                 if ($method -eq 'GET' -and $path -eq '/api/health') {
                     $health=Get-TuzeHealth; $vision=Get-VisionModel
                     $health.vision_ready=[bool]$vision; $health.vision_model=$vision
+                    $health.image_ready=[bool](Get-TuzeImageRuntime).ready
                     Send-Json $stream 200 $health; continue
                 }
                 if ($method -eq 'GET' -and $path -eq '/api/session') {
@@ -123,7 +125,7 @@ try {
                     } else { Send-Json $stream 200 @{authenticated=$false;waiting=$false;error=$null} }
                     continue
                 }
-                $jobMatch = [regex]::Match($path,'^/api/(?:tuze|logo|chat)/result/([0-9a-f]{32})$')
+                $jobMatch = [regex]::Match($path,'^/api/(?:tuze|logo|chat|image)/result/([0-9a-f]{32})$')
                 if ($method -eq 'GET' -and $jobMatch.Success) {
                     $jobId = $jobMatch.Groups[1].Value
                     $outputPath = Join-Path $script:JobFolder ($jobId + '.result.json')
@@ -135,7 +137,7 @@ try {
                         catch { Send-Json $stream 500 @{error='Түзету нәтижесін оқу мүмкін болмады.'} }
                     } elseif ([System.IO.File]::Exists($inputPath)) {
                         $age = [DateTime]::UtcNow - [System.IO.File]::GetCreationTimeUtc($inputPath)
-                        if ($age.TotalMinutes -gt 16) { Send-Json $stream 503 @{error='gpt-oss:20b жауап беруге тым ұзақ уақыт жұмсады. Жедел жадты және Ollama-ны тексеріңіз.'} }
+                        if ($age.TotalMinutes -gt $(if ($path -like '/api/image/result/*') { 35 } else { 16 })) { Send-Json $stream 503 @{error='Модель жауап беруге тым ұзақ уақыт жұмсады. Жедел жадты тексеріңіз.'} }
                         elseif ($path -like '/api/chat/result/*' -and [System.IO.File]::Exists($progressPath)) {
                             try {
                                 $progress = Get-Content -LiteralPath $progressPath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
@@ -155,7 +157,7 @@ try {
                 }
                 $retireMatch=[regex]::Match($path,'^/api/retire/(chat_\d{3,}\.json)$')
                 $isWrite=($method -eq 'PUT' -and $localMatch.Success) -or
-                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/chat/start','/api/tuze','/api/tuze/start','/api/logo/start','/api/login')))
+                    ($method -eq 'POST' -and ($retireMatch.Success -or $path -in @('/api/chat','/api/chat/start','/api/tuze','/api/tuze/start','/api/logo/start','/api/image/start','/api/login')))
                 if (-not $isWrite) { Send-Json $stream 404 @{error='Мекенжай табылмады.'}; continue }
                 if (-not $headers.ContainsKey('Content-Type') -or $headers['Content-Type'] -notmatch '^application/json(?:\s*;|$)') {
                     Send-Json $stream 415 @{error='JSON сұрауы керек.'}; continue
@@ -165,7 +167,7 @@ try {
                 if (-not [int]::TryParse($headers['Content-Length'],[ref]$length) -or $length -lt 1) {
                     Send-Json $stream 400 @{error='Content-Length жарамсыз.'}; continue
                 }
-                if ($length -gt 2097152) { Send-Json $stream 413 @{error='Сұрау тым үлкен.'}; continue }
+                if ($length -gt 10485760) { Send-Json $stream 413 @{error='Сұрау тым үлкен.'}; continue }
                 $body=[byte[]]::new($length); $read=0
                 while ($read -lt $length) { $n=$stream.Read($body,$read,$length-$read); if ($n -le 0) { break }; $read+=$n }
                 if ($read -ne $length) { Send-Json $stream 400 @{error='Сұрау толық келмеді.'}; continue }
@@ -210,6 +212,22 @@ try {
                             Start-Process -FilePath 'powershell.exe' -ArgumentList $arg -ErrorAction Stop | Out-Null
                             Send-Json $stream 200 @{started=$true}
                         }
+                    } elseif ($path -eq '/api/image/start') {
+                        if ($payload.text -isnot [string] -or [string]::IsNullOrWhiteSpace($payload.text) -or
+                            $payload.text.Length -gt 800) { throw 'Сурет сипаттамасы 1–800 таңба болуы керек.' }
+                        if (-not (Get-TuzeImageRuntime).ready) { throw 'Сурет моделі жоқ. Storage\Setup-Images.cmd файлын бір рет іске қосыңыз.' }
+                        $jobId = [guid]::NewGuid().ToString('N')
+                        $inputPath = Join-Path $script:JobFolder ($jobId + '.input.json')
+                        $workerPath = Join-Path $PSScriptRoot 'image-worker.ps1'
+                        [System.IO.File]::WriteAllText($inputPath,(ConvertTo-Json -InputObject @{text=$payload.text} -Compress),[System.Text.UTF8Encoding]::new($false))
+                        try {
+                            $args = '-NoLogo -NoProfile -ExecutionPolicy Bypass -File "' + $workerPath + '" -Job ' + $jobId + ' -OllamaUrl ' + $script:TuzeUrl
+                            Start-Process -FilePath 'powershell.exe' -ArgumentList $args -WindowStyle Hidden -ErrorAction Stop | Out-Null
+                        } catch {
+                            Remove-Item -LiteralPath $inputPath -Force -ErrorAction SilentlyContinue
+                            throw
+                        }
+                        Send-Json $stream 200 @{job_id=$jobId;started=$true}
                     } elseif ($path -eq '/api/logo/start') {
                         if ($payload.text -isnot [string] -or $payload.text.Length -lt 1 -or
                             $payload.text.Length -gt 4000 -or $payload.stage -cnotin @('analyze','build') -or
