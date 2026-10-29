@@ -54,11 +54,28 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
         $cliArgs = @('--model',('"' + $runtime.model + '"'),'--prompt-file',('"' + $promptFile + '"'),
             '--output',('"' + $outputFile + '"'),'--steps','2','--cfg-scale','1.0',
             '--backend','cpu','-W','512','-H','512')
-        $process = Start-Process -FilePath $runtime.cli -ArgumentList $cliArgs -WorkingDirectory (Split-Path -Parent $runtime.cli) -WindowStyle Hidden -PassThru -RedirectStandardOutput $stdout -RedirectStandardError $stderr
-        if (-not $process.WaitForExit(1800000)) {
-            try { $process.Kill() } catch { }
-            throw 'Сурет жасау 30 минуттан асты. Ноутбуктің жедел жадын тексеріңіз.'
-        }
+        # Start-Process -PassThru can leave ExitCode empty on Windows PowerShell
+        # 5.1. Capture both streams asynchronously and read the actual exit code.
+        $process = [System.Diagnostics.Process]::new()
+        $start = [System.Diagnostics.ProcessStartInfo]::new($runtime.cli)
+        $start.Arguments = $cliArgs -join ' '
+        $start.WorkingDirectory = Split-Path -Parent $runtime.cli
+        $start.UseShellExecute = $false
+        $start.CreateNoWindow = $true
+        $start.RedirectStandardOutput = $true
+        $start.RedirectStandardError = $true
+        $process.StartInfo = $start
+        try {
+            if (-not $process.Start()) { throw 'sd-cli іске қосылмады.' }
+            $outTask = $process.StandardOutput.ReadToEndAsync()
+            $errTask = $process.StandardError.ReadToEndAsync()
+            $completed = $process.WaitForExit(1800000)
+            if (-not $completed) { try { $process.Kill() } catch { }; [void]$process.WaitForExit(5000) }
+            [System.IO.File]::WriteAllText($stdout,$outTask.GetAwaiter().GetResult(),[System.Text.UTF8Encoding]::new($false))
+            [System.IO.File]::WriteAllText($stderr,$errTask.GetAwaiter().GetResult(),[System.Text.UTF8Encoding]::new($false))
+            if (-not $completed) { throw 'Сурет жасау 30 минуттан асты. Ноутбуктің жедел жадын тексеріңіз.' }
+            $exitCode = [int]$process.ExitCode
+        } finally { $process.Dispose() }
         if (-not [System.IO.File]::Exists($outputFile)) {
             # Some sd-cli builds add an index to the output filename.
             $alternative = Get-ChildItem -LiteralPath $jobs -File -Filter ($Job + '_*.png') -ErrorAction SilentlyContinue |
@@ -75,8 +92,7 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
             }
             $detailText = (($details -join ' ') -replace '\s+', ' ').Trim()
             if ($detailText.Length -gt 1500) { $detailText = $detailText.Substring($detailText.Length - 1500) }
-            $exitCode = try { $process.Refresh(); [string]$process.ExitCode } catch { '?' }
-            throw ('sd-cli сурет файлын жасамады (exit ' + $exitCode + '). ' + $detailText +
+            throw ('sd-cli сурет файлын жасамады (exit ' + $exitCode + ', 0x' + $exitCode.ToString('X8') + '). ' + $detailText +
                 ' Журналдар: ' + $stdout + ' және ' + $stderr)
         }
         $bytes = [System.IO.File]::ReadAllBytes($outputFile)

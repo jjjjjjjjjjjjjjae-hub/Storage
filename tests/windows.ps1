@@ -136,7 +136,9 @@ try {
         }
         if ($null -eq $imageResult) { throw ('Image diagnostic job did not finish: ' + $case.text) }
         if ($case.expectError) {
-            if ($imageResult.error -notmatch 'MOCK IMAGE FAILED') { throw ('Missing stdout diagnosis: ' + $imageResult.error) }
+            if ($imageResult.error -notmatch 'MOCK IMAGE FAILED' -or $imageResult.error -notmatch 'exit 7, 0x00000007') {
+                throw ('Missing stdout or process exit diagnosis: ' + $imageResult.error)
+            }
         } elseif ($imageResult.error -or -not $imageResult.result.image_base64) {
             throw ('Alternate output filename failed: ' + (ConvertTo-Json $imageResult -Depth 4 -Compress))
         }
