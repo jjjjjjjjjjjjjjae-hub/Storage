@@ -13,9 +13,11 @@ $server = Join-Path $root 'app\server.ps1'
 $stdout = Join-Path $env:LOCALAPPDATA 'server.out'
 $stderr = Join-Path $env:LOCALAPPDATA 'server.err'
 $oldImageCli=$env:TUZE_IMAGE_CLI; $oldImageModel=$env:TUZE_IMAGE_MODEL; $oldImagePng=$env:TUZE_IMAGE_TEST_PNG
+$oldUnloadMarker=$env:TUZE_IMAGE_UNLOAD_MARKER
 $fakeCli=Join-Path $env:LOCALAPPDATA 'sd-cli.exe'
 $env:TUZE_IMAGE_MODEL=Join-Path $env:LOCALAPPDATA 'test-model.safetensors'
 $env:TUZE_IMAGE_TEST_PNG=Join-Path $env:LOCALAPPDATA 'image.png'
+$env:TUZE_IMAGE_UNLOAD_MARKER=Join-Path $env:LOCALAPPDATA 'unloaded.txt'
 $env:TUZE_IMAGE_CLI=$fakeCli
 [System.IO.File]::WriteAllText($env:TUZE_IMAGE_MODEL,'mock',[System.Text.Encoding]::ASCII)
 [System.IO.File]::WriteAllBytes($env:TUZE_IMAGE_TEST_PNG,[Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lNsAAAAASUVORK5CYII='))
@@ -24,11 +26,18 @@ using System;
 using System.IO;
 public class MockImageCli {
   public static int Main(string[] args) {
+    string prompt = "", output = "";
     for (int i=0;i<args.Length-1;i++) {
-      if (args[i]=="--prompt-file") Console.Error.WriteLine("Prompt: "+File.ReadAllText(args[i+1]));
-      if (args[i]=="--output") { File.Copy(Environment.GetEnvironmentVariable("TUZE_IMAGE_TEST_PNG"),args[i+1],true); return 0; }
+      if (args[i]=="--prompt-file") prompt = File.ReadAllText(args[i+1]);
+      if (args[i]=="--output") output = args[i+1];
     }
-    return 2;
+    if (output.Length==0) return 2;
+    if (!File.Exists(Environment.GetEnvironmentVariable("TUZE_IMAGE_UNLOAD_MARKER"))) { Console.Out.WriteLine("TEXT MODEL STILL LOADED"); return 8; }
+    if (prompt.Contains("ERROR_OUT")) { Console.Out.WriteLine("MOCK IMAGE FAILED: insufficient memory"); return 7; }
+    if (prompt.Contains("ALT_OUT")) output = Path.Combine(Path.GetDirectoryName(output),Path.GetFileNameWithoutExtension(output)+"_0.png");
+    Console.Error.WriteLine("Prompt: "+prompt);
+    File.Copy(Environment.GetEnvironmentVariable("TUZE_IMAGE_TEST_PNG"),output,true);
+    return 0;
   }
 }
 '@
@@ -116,6 +125,22 @@ try {
         $imageResult.result.prompt_en -notmatch 'A red apple') {
         throw ('Local image generation failed: ' + (ConvertTo-Json $imageResult -Depth 5 -Compress))
     }
+    foreach ($case in @(@{text='ALT_OUT';expectError=$false},@{text='ERROR_OUT';expectError=$true})) {
+        $body = @{text=$case.text} | ConvertTo-Json -Compress
+        $imageJob = Invoke-RestMethod -Uri ($base + '/api/image/start') -Method Post -ContentType 'application/json' -Body $body
+        $imageResult = $null
+        for ($i=0; $i -lt 60; $i++) {
+            Start-Sleep -Milliseconds 200
+            $candidate=Invoke-RestMethod -Uri ($base + '/api/image/result/' + $imageJob.job_id) -TimeoutSec 3
+            if ($candidate.done) { $imageResult=$candidate; break }
+        }
+        if ($null -eq $imageResult) { throw ('Image diagnostic job did not finish: ' + $case.text) }
+        if ($case.expectError) {
+            if ($imageResult.error -notmatch 'MOCK IMAGE FAILED') { throw ('Missing stdout diagnosis: ' + $imageResult.error) }
+        } elseif ($imageResult.error -or -not $imageResult.result.image_base64) {
+            throw ('Alternate output filename failed: ' + (ConvertTo-Json $imageResult -Depth 4 -Compress))
+        }
+    }
     $now = '2026-10-28T00:00:00.000Z' 
     function New-Envelope([string]$Filename) {
         return @{schema_version=3;id=[guid]::NewGuid().ToString();version=[guid]::NewGuid().ToString();filename=$Filename;
@@ -153,4 +178,5 @@ try {
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
     $env:LOCALAPPDATA = $oldLocalAppData
     $env:TUZE_IMAGE_CLI=$oldImageCli; $env:TUZE_IMAGE_MODEL=$oldImageModel; $env:TUZE_IMAGE_TEST_PNG=$oldImagePng
+    $env:TUZE_IMAGE_UNLOAD_MARKER=$oldUnloadMarker
 }
