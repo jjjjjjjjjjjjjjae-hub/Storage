@@ -70,6 +70,20 @@ test('legacy encrypted chat migrates with original DPAPI key then new account ne
   await other.syncAll();
   assert.equal((await other.open(old.filename)).title,old.title);
 });
+test('unreadable legacy chat is preserved while newer chats still sync',async()=>{
+  const local=new MemoryLocal(),remote=new MemoryRemote();
+  const old=await prepared('chat_001.json','Ескі чат');
+  const encrypted=await encryptChat({...old,schema_version:2},legacyKey);
+  await local.put(old.filename,encrypted,null);
+  const store=new ChatStore(local,'a-different-existing-key',remote);
+  const current=await store.create();
+  await store.append(current.filename,'user','Сурет жаса: қызыл алма');
+  const result=await store.syncAll();
+  assert.deepEqual(result.skippedLegacy,['chat_001.json']);
+  assert.deepEqual(await local.get(old.filename),encrypted);
+  assert.equal((await remote.get(old.filename)),null);
+  assert.equal((await remote.get(current.filename)).envelope.messages[0].content,'Сурет жаса: қызыл алма');
+});
 test('same-chat divergent messages merge without loss',async()=>{
   const local=new MemoryLocal(),remote=new MemoryRemote();
   const store=new ChatStore(local,null,remote);

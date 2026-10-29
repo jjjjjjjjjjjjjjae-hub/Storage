@@ -298,7 +298,7 @@ async function synchronize() {
   const before = active;
   const selectedId = active?.id;
   syncStatus('GitHub синхрондалуда…');
-  await store.syncAll();
+  const {skippedLegacy} = await store.syncAll();
   active = null;
   const names = await store.list();
   if (selectedId) for (const filename of names) {
@@ -308,10 +308,18 @@ async function synchronize() {
     try { active = await store.open(filename); break; } catch {}
   }
   if (!appearanceUnchanged(before, active)) renderChat();
-  await renderList(); syncStatus('Барлық чат GitHub-та сақталды');
+  await renderList();
+  if (skippedLegacy.length) {
+    syncStatus('Жаңа чаттар GitHub-та · ескі ' + skippedLegacy.join(', ') + ' ашылмады');
+    if (!legacyWarningShown) {
+      message('Ескі шифрланған ' + skippedLegacy.join(', ') + ' ашылмады. Файл сақталды; қалған чаттар GitHub-пен синхрондалды.', true);
+      legacyWarningShown = true;
+    }
+  } else syncStatus('Барлық чат GitHub-та сақталды');
 }
 
 let backgroundSync = false;
+let legacyWarningShown = false;
 async function autoSync() {
   if (busy || backgroundSync || messageReview || !store?.remote) return;
   backgroundSync = true;
@@ -437,6 +445,16 @@ async function sendChat(optimizedPrompt = null) { return run(async () => {
       store.syncOne(chatFile).catch(()=>syncStatus('Ноутбукта сақталды · GitHub синхрондау күтіп тұр')));
   });
 }); }
+async function saveImageReply(chatFile,content,image=null) {
+  const completed = await store.append(chatFile,'assistant',content,image);
+  if (active?.filename === chatFile) { active = completed; renderChat(); }
+  await renderList();
+  queueMicrotask(() => {
+    if (!store?.remote) return;
+    void (active?.filename === chatFile ? syncCurrent() :
+      store.syncOne(chatFile).catch(()=>syncStatus('Ноутбукта сақталды · GitHub синхрондау күтіп тұр')));
+  });
+}
 async function generateImage() { return run(async () => {
   assertUnlocked();
   if (!imageReady) throw new Error('Сурет моделі жоқ. Storage/Setup-Images.cmd файлын бір рет іске қосыңыз.');
@@ -451,29 +469,32 @@ async function generateImage() { return run(async () => {
   renderChat(); await renderList();
   showThinking();
   $('thinking-status').textContent = 'Жергілікті сурет моделі жұмыс істеп жатыр…';
-  const job = await api('/api/image/start', {text:prompt});
-  if (!/^[a-f0-9]{32}$/.test(job.job_id || '')) throw new Error('Сурет тапсырмасы басталмады.');
-  let result = null;
-  for (let attempt=0; attempt<1800; attempt++) {
-    await new Promise(resolve=>setTimeout(resolve,1000));
-    const state = await api(`/api/image/result/${job.job_id}`);
-    if (!state.done) continue;
-    if (state.error) throw new Error(state.error);
-    result = state.result;
-    break;
+  let image;
+  try {
+    const job = await api('/api/image/start', {text:prompt});
+    if (!/^[a-f0-9]{32}$/.test(job.job_id || '')) throw new Error('Сурет тапсырмасы басталмады.');
+    let result = null;
+    for (let attempt=0; attempt<1800; attempt++) {
+      await new Promise(resolve=>setTimeout(resolve,1000));
+      const state = await api(`/api/image/result/${job.job_id}`);
+      if (!state.done) continue;
+      if (state.error) throw new Error(state.error);
+      result = state.result;
+      break;
+    }
+    if (!result?.image_base64 || result.image_base64.length > 5_600_000)
+      throw new Error('Сурет моделі нәтиже бермеді. Сипаттама чатта сақталды.');
+    const bytes = Uint8Array.from(atob(result.image_base64), char=>char.charCodeAt(0));
+    image = await preparePhoto(new Blob([bytes],{type:'image/png'}));
+  } catch (error) {
+    // The sync banner must not hide a failed image job. Keep the actual failure
+    // next to the prompt so it remains visible after refresh and on other PCs.
+    const detail = String(error.message || 'Белгісіз қате').slice(0,1200);
+    try { await saveImageReply(chatFile,'Сурет жасалмады: '+detail); }
+    catch (saveError) { throw new Error(detail+' Чатқа қатені сақтау мүмкін емес: '+saveError.message); }
+    throw error;
   }
-  if (!result?.image_base64 || result.image_base64.length > 5_600_000)
-    throw new Error('Сурет моделі нәтиже бермеді. Сипаттама чатта сақталды.');
-  const bytes = Uint8Array.from(atob(result.image_base64), char=>char.charCodeAt(0));
-  const image = await preparePhoto(new Blob([bytes],{type:'image/png'}));
-  const completed = await store.append(chatFile,'assistant','Жасалған сурет: '+prompt,image);
-  if (active?.filename === chatFile) { active = completed; renderChat(); }
-  await renderList();
-  queueMicrotask(() => {
-    if (!store?.remote) return;
-    void (active?.filename === chatFile ? syncCurrent() :
-      store.syncOne(chatFile).catch(()=>syncStatus('Ноутбукта сақталды · GitHub синхрондау күтіп тұр')));
-  });
+  await saveImageReply(chatFile,'Жасалған сурет: '+prompt,image);
 }); }
 $('send').addEventListener('click', () => { if (logoOriginal !== null) closeLogo(); void (imageMode ? generateImage() : sendChat()); });
 
