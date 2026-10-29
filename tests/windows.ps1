@@ -25,7 +25,7 @@ using System.IO;
 public class MockImageCli {
   public static int Main(string[] args) {
     for (int i=0;i<args.Length-1;i++) {
-      if (args[i]=="--prompt-file" && !File.ReadAllText(args[i+1]).Contains("A red apple")) return 3;
+      if (args[i]=="--prompt-file") Console.Error.WriteLine("Prompt: "+File.ReadAllText(args[i+1]));
       if (args[i]=="--output") { File.Copy(Environment.GetEnvironmentVariable("TUZE_IMAGE_TEST_PNG"),args[i+1],true); return 0; }
     }
     return 2;
@@ -112,7 +112,8 @@ try {
         if ($candidate.done) { $imageResult=$candidate; break }
     }
     if ($null -eq $imageResult -or $imageResult.error -or
-        [Convert]::FromBase64String([string]$imageResult.result.image_base64).Length -lt 16) {
+        [Convert]::FromBase64String([string]$imageResult.result.image_base64).Length -lt 16 -or
+        $imageResult.result.prompt_en -notmatch 'A red apple') {
         throw ('Local image generation failed: ' + (ConvertTo-Json $imageResult -Depth 5 -Compress))
     }
     $now = '2026-10-28T00:00:00.000Z' 

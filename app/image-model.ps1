@@ -52,7 +52,8 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
             throw 'Сурет жасау 30 минуттан асты. Ноутбуктің жедел жадын тексеріңіз.'
         }
         if ($process.ExitCode -ne 0 -or -not [System.IO.File]::Exists($outputFile)) {
-            throw 'Сурет моделі нәтиже бермеді. Setup-Images.cmd орнатуын және ноутбуктің жадын тексеріңіз.'
+            $details=if ([System.IO.File]::Exists($stderr)) { (Get-Content -LiteralPath $stderr -Tail 4 -ErrorAction SilentlyContinue) -join ' ' } else { '' }
+            throw ('Сурет моделі нәтиже бермеді (exit ' + $process.ExitCode + '). ' + $details + ' Setup-Images.cmd орнатуын және ноутбуктің жадын тексеріңіз.')
         }
         $bytes = [System.IO.File]::ReadAllBytes($outputFile)
         if ($bytes.Length -lt 16 -or $bytes.Length -gt 4194304 -or
