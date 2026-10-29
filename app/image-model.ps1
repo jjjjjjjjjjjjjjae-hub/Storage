@@ -35,6 +35,13 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
         }
     } catch { # An English description works even if Ollama could not translate.
     }
+    # Ensure the 13 GB text model is released before loading the image model,
+    # including when translation timed out or another TUZE job kept it alive.
+    try {
+        [void](Invoke-TuzeOllama 'POST' '/api/chat' @{
+            model=[string]$script:TuzeConfig.model;messages=@();keep_alive=0;stream=$false
+        } 90)
+    } catch { }
     $jobs = Join-Path $env:LOCALAPPDATA 'TuzeStorage\jobs'
     $promptFile = Join-Path $jobs ($Job + '.prompt.txt')
     $outputFile = Join-Path $jobs ($Job + '.png')

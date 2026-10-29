@@ -1,4 +1,5 @@
 import http from 'node:http';
+import {writeFileSync} from 'node:fs';
 
 const port = Number(process.argv[2] || 11439);
 const server = http.createServer(async (req, res) => {
@@ -20,6 +21,11 @@ const server = http.createServer(async (req, res) => {
     let raw = '';
     for await (const chunk of req) raw += chunk;
     const data = JSON.parse(raw);
+    if (Array.isArray(data.messages) && data.messages.length === 0 && data.keep_alive === 0) {
+      if (process.env.TUZE_IMAGE_UNLOAD_MARKER) writeFileSync(process.env.TUZE_IMAGE_UNLOAD_MARKER,'unloaded');
+      res.end(JSON.stringify({done:true,done_reason:'unload',message:{content:''}}));
+      return;
+    }
     const last = data.messages.at(-1);
     const photo = Array.isArray(last.images) && last.images.length === 1;
     if (!photo && data.think !== 'low') {

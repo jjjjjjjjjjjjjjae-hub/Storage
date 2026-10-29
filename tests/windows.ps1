@@ -13,9 +13,11 @@ $server = Join-Path $root 'app\server.ps1'
 $stdout = Join-Path $env:LOCALAPPDATA 'server.out'
 $stderr = Join-Path $env:LOCALAPPDATA 'server.err'
 $oldImageCli=$env:TUZE_IMAGE_CLI; $oldImageModel=$env:TUZE_IMAGE_MODEL; $oldImagePng=$env:TUZE_IMAGE_TEST_PNG
+$oldUnloadMarker=$env:TUZE_IMAGE_UNLOAD_MARKER
 $fakeCli=Join-Path $env:LOCALAPPDATA 'sd-cli.exe'
 $env:TUZE_IMAGE_MODEL=Join-Path $env:LOCALAPPDATA 'test-model.safetensors'
 $env:TUZE_IMAGE_TEST_PNG=Join-Path $env:LOCALAPPDATA 'image.png'
+$env:TUZE_IMAGE_UNLOAD_MARKER=Join-Path $env:LOCALAPPDATA 'unloaded.txt'
 $env:TUZE_IMAGE_CLI=$fakeCli
 [System.IO.File]::WriteAllText($env:TUZE_IMAGE_MODEL,'mock',[System.Text.Encoding]::ASCII)
 [System.IO.File]::WriteAllBytes($env:TUZE_IMAGE_TEST_PNG,[Convert]::FromBase64String('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/lNsAAAAASUVORK5CYII='))
@@ -30,6 +32,7 @@ public class MockImageCli {
       if (args[i]=="--output") output = args[i+1];
     }
     if (output.Length==0) return 2;
+    if (!File.Exists(Environment.GetEnvironmentVariable("TUZE_IMAGE_UNLOAD_MARKER"))) { Console.Out.WriteLine("TEXT MODEL STILL LOADED"); return 8; }
     if (prompt.Contains("ERROR_OUT")) { Console.Out.WriteLine("MOCK IMAGE FAILED: insufficient memory"); return 7; }
     if (prompt.Contains("ALT_OUT")) output = Path.Combine(Path.GetDirectoryName(output),Path.GetFileNameWithoutExtension(output)+"_0.png");
     Console.Error.WriteLine("Prompt: "+prompt);
@@ -175,4 +178,5 @@ try {
     if (-not $mock.HasExited) { Stop-Process -Id $mock.Id -Force }
     $env:LOCALAPPDATA = $oldLocalAppData
     $env:TUZE_IMAGE_CLI=$oldImageCli; $env:TUZE_IMAGE_MODEL=$oldImageModel; $env:TUZE_IMAGE_TEST_PNG=$oldImagePng
+    $env:TUZE_IMAGE_UNLOAD_MARKER=$oldUnloadMarker
 }
