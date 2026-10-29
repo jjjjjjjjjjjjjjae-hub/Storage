@@ -753,6 +753,7 @@ $('image-mode').addEventListener('click', async () => {
   $('draft').placeholder = imageMode ? 'Суретті сипатта: Алматыдағы түнгі көше, шынайы фото…' : 'TUZE-ге хабарлама жаз…';
   $('tuze-status').textContent = imageMode ? 'Жергілікті SD-Turbo · 512×512 · фото жасау' : 'TUZE қателерді тексереді';
   $('photo-input').disabled=imageMode;
+  for (const id of ['logo-ai','correct-now','correct-toggle']) $(id).disabled=imageMode;
   cancelTuze();
   if (!imageMode) scheduleTuze();
   $('draft').focus();
