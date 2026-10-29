@@ -160,6 +160,25 @@ test('generated assistant image stays in its chat and survives GitHub sync',asyn
   assert.equal(restored.messages[1].role,'assistant');
   assert.deepEqual(restored.messages[1].image,image);
 });
+test('GitHub reads an image-heavy chat through its blob endpoint after 1 MB',async()=>{
+  const file=await prepared('chat_001.json','Large');
+  file.version=crypto.randomUUID();
+  const sha='a'.repeat(40), requested=[];
+  const request=async(url)=>{
+    requested.push(url);
+    let value;
+    if(url.endsWith('/user'))value={login:'tuze-test'};
+    else if(url.endsWith('/repos/tuze-test/Tuze-Private-Chats'))value={name:'Tuze-Private-Chats',private:true};
+    else if(url.endsWith('/contents/chats/chat_001.json'))value={encoding:'none',content:'',sha};
+    else if(url.endsWith('/git/blobs/'+sha))value={encoding:'base64',content:btoa(JSON.stringify(file))};
+    else throw new Error(url);
+    return {ok:true,status:200,async json(){return value;}};
+  };
+  const saved=await githubClient('valid-test-token',request).get(file.filename);
+  assert.equal(saved.envelope.title,'Large');
+  assert.equal(saved.sha,sha);
+  assert.ok(requested.some(url=>url.endsWith('/git/blobs/'+sha)));
+});
 
 test('message correction saves original text, updates content and survives GitHub sync',async()=>{
   const remote=new MemoryRemote(), local=new MemoryLocal();

@@ -63,7 +63,7 @@ function Save-ChatEnvelope([string]$Filename, $Envelope, [string]$ExpectedVersio
     }
     $json = ConvertTo-Json -InputObject $Envelope -Depth 12 -Compress
     $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-    if ($bytes.Length -gt 2097152) { throw 'Чат файлы тым үлкен.' }
+    if ($bytes.Length -gt 8388608) { throw 'Чат файлы тым үлкен.' }
     $temp = $path + '.' + [guid]::NewGuid().ToString('N') + '.tmp'
     try {
         $stream = [System.IO.FileStream]::new($temp, [System.IO.FileMode]::CreateNew,

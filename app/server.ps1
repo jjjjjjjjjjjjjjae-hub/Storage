@@ -167,7 +167,7 @@ try {
                 if (-not [int]::TryParse($headers['Content-Length'],[ref]$length) -or $length -lt 1) {
                     Send-Json $stream 400 @{error='Content-Length жарамсыз.'}; continue
                 }
-                if ($length -gt 2097152) { Send-Json $stream 413 @{error='Сұрау тым үлкен.'}; continue }
+                if ($length -gt 10485760) { Send-Json $stream 413 @{error='Сұрау тым үлкен.'}; continue }
                 $body=[byte[]]::new($length); $read=0
                 while ($read -lt $length) { $n=$stream.Read($body,$read,$length-$read); if ($n -le 0) { break }; $read+=$n }
                 if ($read -ne $length) { Send-Json $stream 400 @{error='Сұрау толық келмеді.'}; continue }
