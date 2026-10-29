@@ -274,13 +274,23 @@ export class ChatStore {
   async syncAll() {
     if(!this.remote)throw new Error('GitHub аккаунтына кіріңіз.');
     const names=await this.remote.list();
+    const skippedLegacy=[];
     for(const filename of names) {
       const remote=await this.remote.get(filename);if(!remote)continue;
       const local=await this.local.get(filename);
       if(!local)await this.local.put(filename,remote.envelope,null);
       else await this.syncOne(filename);
     }
-    for(const filename of await this.list()) if(!names.includes(filename))await this.syncOne(filename);
-    return this.list();
+    for(const filename of await this.list()) if(!names.includes(filename)) {
+      const local=await this.local.get(filename);
+      if(local?.schema_version===2) {
+        // A damaged or inaccessible old key must not block newer chats. Never
+        // alter this encrypted file; it may still be recoverable on this PC.
+        try { await this.decode(local,filename); }
+        catch { skippedLegacy.push(filename); continue; }
+      }
+      await this.syncOne(filename);
+    }
+    return {files:await this.list(),skippedLegacy};
   }
 }
