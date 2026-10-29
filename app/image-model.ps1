@@ -40,6 +40,7 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
     $outputFile = Join-Path $jobs ($Job + '.png')
     $stdout = Join-Path $jobs ($Job + '.image.stdout.txt')
     $stderr = Join-Path $jobs ($Job + '.image.stderr.txt')
+    $success = $false
     try {
         [System.IO.File]::WriteAllText($promptFile,$prompt,[System.Text.UTF8Encoding]::new($false))
         # All paths are controlled locally. The user's words are read from a file, never parsed as CLI options.
@@ -52,17 +53,36 @@ function Invoke-TuzeImage([string]$Text, [string]$Job) {
             throw 'Сурет жасау 30 минуттан асты. Ноутбуктің жедел жадын тексеріңіз.'
         }
         if (-not [System.IO.File]::Exists($outputFile)) {
-            $details=if ([System.IO.File]::Exists($stderr)) { (Get-Content -LiteralPath $stderr -Tail 4 -ErrorAction SilentlyContinue) -join ' ' } else { '' }
-            throw ('Сурет моделі нәтиже бермеді. ' + $details + ' Setup-Images.cmd орнатуын және ноутбуктің жадын тексеріңіз.')
+            # Some sd-cli builds add an index to the output filename.
+            $alternative = Get-ChildItem -LiteralPath $jobs -File -Filter ($Job + '_*.png') -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -cmatch ('^' + $Job + '_\d+\.png$') } | Select-Object -First 1
+            if ($alternative) { $outputFile = $alternative.FullName }
+        }
+        if (-not [System.IO.File]::Exists($outputFile)) {
+            # sd-cli commonly logs to stdout. Keep both local logs on failure.
+            $details = @()
+            foreach ($log in @($stderr,$stdout)) {
+                if ([System.IO.File]::Exists($log)) {
+                    $details += @(Get-Content -LiteralPath $log -Tail 12 -ErrorAction SilentlyContinue)
+                }
+            }
+            $detailText = (($details -join ' ') -replace '\s+', ' ').Trim()
+            if ($detailText.Length -gt 1500) { $detailText = $detailText.Substring($detailText.Length - 1500) }
+            $exitCode = try { $process.Refresh(); [string]$process.ExitCode } catch { '?' }
+            throw ('sd-cli сурет файлын жасамады (exit ' + $exitCode + '). ' + $detailText +
+                ' Журналдар: ' + $stdout + ' және ' + $stderr)
         }
         $bytes = [System.IO.File]::ReadAllBytes($outputFile)
         if ($bytes.Length -lt 16 -or $bytes.Length -gt 4194304 -or
             $bytes[0] -ne 137 -or $bytes[1] -ne 80 -or $bytes[2] -ne 78 -or $bytes[3] -ne 71) {
             throw 'Модель жарамды PNG суретін қайтармады.'
         }
+        $success = $true
         return @{image_base64=[Convert]::ToBase64String($bytes);prompt_en=$prompt}
     } finally {
-        foreach ($path in @($promptFile,$outputFile,$stdout,$stderr)) {
+        $remove = @($promptFile,$outputFile)
+        if ($success) { $remove += @($stdout,$stderr) }
+        foreach ($path in $remove) {
             try { Remove-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue } catch { }
         }
     }

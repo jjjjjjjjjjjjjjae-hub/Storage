@@ -32,7 +32,9 @@ const server = http.createServer(async (req, res) => {
     if (data.format) {
       let output;
       if (data.format.properties?.prompt_en && !data.format.properties?.interpreted_kk) {
-        output={prompt_en:'A red apple on a wooden table, realistic photograph'};
+        output={prompt_en:last.content.includes('ALT_OUT') ? 'ALT_OUT: A red apple' :
+          last.content.includes('ERROR_OUT') ? 'ERROR_OUT: A red apple' :
+          'A red apple on a wooden table, realistic photograph'};
       } else if (data.format.properties?.prompt_en) {
         const request = JSON.parse(last.content);
         output = request.stage === 'build'
