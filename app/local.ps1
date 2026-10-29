@@ -46,7 +46,7 @@ function Assert-Envelope($Envelope, [string]$Filename) {
             $m.content -isnot [string] -or
             $m.content.Length -gt $(if ($m.role -ceq 'assistant') { 40000 } else { 4000 }) -or
             $m.created_at -isnot [string]) { throw 'Хабарлама жарамсыз.' }
-        if ($null -ne $m.image -and ($m.role -cne 'user' -or $m.image.mime -cne 'image/jpeg' -or
+        if ($null -ne $m.image -and ($m.image.mime -cne 'image/jpeg' -or
             $m.image.data -isnot [string] -or $m.image.data.Length -gt 200000 -or
             $m.image.data -cnotmatch '^[A-Za-z0-9+/]+={0,2}$')) { throw 'Фото жарамсыз.' }
     }

@@ -146,6 +146,20 @@ test('photo metadata stays intact after sync',async()=>{
   await store.append(chat.filename,'user','Бұл не?',photo);await store.syncAll();
   assert.deepEqual((await remote.get(chat.filename)).envelope.messages[0].image,photo);
 });
+test('generated assistant image stays in its chat and survives GitHub sync',async()=>{
+  const remote=new MemoryRemote();
+  const laptop=new ChatStore(new MemoryLocal(),null,remote);
+  const chat=await laptop.create();
+  await laptop.append(chat.filename,'user','Қызыл алма суретін жаса');
+  const image={mime:'image/jpeg',data:'AA==',width:512,height:512};
+  await laptop.append(chat.filename,'assistant','Жасалған сурет: қызыл алма',image);
+  await laptop.syncOne(chat.filename);
+  const other=new ChatStore(new MemoryLocal(),null,remote);
+  await other.syncAll();
+  const restored=await other.open(chat.filename);
+  assert.equal(restored.messages[1].role,'assistant');
+  assert.deepEqual(restored.messages[1].image,image);
+});
 
 test('message correction saves original text, updates content and survives GitHub sync',async()=>{
   const remote=new MemoryRemote(), local=new MemoryLocal();

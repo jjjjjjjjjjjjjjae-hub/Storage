@@ -18,7 +18,7 @@ function assertChat(c, filename) {
       throw new Error('Чаттың хабарламасы жарамсыз.');
     if (m.edited_at !== undefined && (typeof m.edited_at !== 'string' || !Number.isFinite(Date.parse(m.edited_at)))) throw new Error('Түзету уақыты қате.');
     if (m.original_content !== undefined && (typeof m.original_content !== 'string' || m.original_content.length > 4000)) throw new Error('Бастапқы мәтін жарамсыз.');
-    if (m.image && (m.role !== 'user' || m.image.mime !== 'image/jpeg' ||
+    if (m.image && (m.image.mime !== 'image/jpeg' ||
        typeof m.image.data !== 'string' || m.image.data.length > 200_000 ||
        !/^[A-Za-z\d+/]+={0,2}$/.test(m.image.data))) throw new Error('Фото жарамсыз.');
   }

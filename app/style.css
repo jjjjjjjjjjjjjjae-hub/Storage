@@ -70,3 +70,6 @@ body.dark .workspace-controls .workspace-mode.selected{background:#193c33;color:
 
 /* Local model streaming progress while Ollama loads/generates */
 #thinking{max-width:100%;white-space:normal}#thinking-status{font-size:12px;color:var(--muted);margin-bottom:8px}#thinking-output{font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:400px;overflow:auto;padding:12px;background:var(--hover);border-radius:12px}
+
+/* Photo generation controls and saved image download. */
+.composer-tools{flex-wrap:wrap}.msg-actions a.copy-message{text-decoration:none;display:inline-flex;align-items:center}
